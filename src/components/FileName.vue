@@ -1,15 +1,35 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
 
-const props = defineProps<{ name: string; path: string }>();
+const props = defineProps<{
+  name: string;
+  path: string;
+  open?: (path: string) => Promise<void>;
+}>();
 
 const POPUP_MS = 2000;
-const popup = ref<{ x: number; y: number } | null>(null);
+const popup = ref<{
+  x: number;
+  y: number;
+  message: string;
+  kind: "info" | "error";
+} | null>(null);
 let popupTimer: ReturnType<typeof setTimeout> | undefined;
 
 function hidePopup() {
   clearTimeout(popupTimer);
   popup.value = null;
+}
+
+function showPopup(rect: DOMRect, message: string, kind: "info" | "error") {
+  hidePopup();
+  popup.value = {
+    x: rect.left + rect.width / 2,
+    y: rect.top,
+    message,
+    kind,
+  };
+  popupTimer = setTimeout(hidePopup, POPUP_MS);
 }
 
 function onClick(e: MouseEvent) {
@@ -18,24 +38,33 @@ function onClick(e: MouseEvent) {
     .writeText(props.path)
     .catch((err) => console.error("copy path failed:", err));
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  hidePopup();
-  popup.value = { x: rect.left + rect.width / 2, y: rect.top };
-  popupTimer = setTimeout(hidePopup, POPUP_MS);
+  showPopup(rect, "Path Copied!", "info");
+}
+
+async function onDblClick(e: MouseEvent) {
+  if (e.button !== 0 || !props.open) return;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  try {
+    await props.open(props.path);
+  } catch (err) {
+    showPopup(rect, String(err), "error");
+  }
 }
 
 onBeforeUnmount(hidePopup);
 </script>
 
 <template>
-  <span class="file-name" @click="onClick">{{ name }}</span>
+  <span class="file-name" @click="onClick" @dblclick="onDblClick">{{ name }}</span>
   <Teleport to="body">
     <div
       v-if="popup"
       class="path-copied"
+      :class="{ error: popup.kind === 'error' }"
       role="status"
       :style="{ left: `${popup.x}px`, top: `${popup.y}px` }"
     >
-      Path Copied!
+      {{ popup.message }}
     </div>
   </Teleport>
 </template>
@@ -65,10 +94,20 @@ onBeforeUnmount(hidePopup);
   pointer-events: none;
 }
 
+.path-copied.error {
+  color: #fff;
+  background-color: #b3261e;
+}
+
 @media (prefers-color-scheme: dark) {
   .path-copied {
     color: #0f0f0f;
     background-color: #f6f6f6;
+  }
+
+  .path-copied.error {
+    color: #fff;
+    background-color: #b3261e;
   }
 }
 </style>

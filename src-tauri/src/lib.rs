@@ -11,9 +11,11 @@ fn current_dir() -> Result<String, String> {
 }
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DirEntry {
     name: String,
     path: String,
+    is_dir: bool,
 }
 
 #[tauri::command]
@@ -27,17 +29,34 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
             items.push(DirEntry {
                 name,
                 path: entry.path().to_string_lossy().into_owned(),
+                is_dir: entry.path().is_dir(),
             });
         }
     }
     Ok(items)
 }
 
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if metadata.is_dir() {
+        return Err("Can't open a directory".to_string());
+    }
+    if metadata.len() > 10 * 1024 * 1024 {
+        return Err("File too large".to_string());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    if bytes.contains(&0) {
+        return Err("Can't open a binary file".to_string());
+    }
+    String::from_utf8(bytes).map_err(|_| "Can't open a binary file".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![current_dir, list_dir])
+        .invoke_handler(tauri::generate_handler![current_dir, list_dir, read_text_file])
         .on_menu_event(|app, event| {
             if event.id() == "open" {
                 let _ = app.emit("menu-open", ());

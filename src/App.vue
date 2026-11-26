@@ -65,6 +65,24 @@ const columnGap = ref(0);
 interface DirEntry {
   name: string;
   path: string;
+  isDir: boolean;
+}
+
+const fileView = ref<{ path: string; content: string } | null>(null);
+const fileOverlay = ref<HTMLElement | null>(null);
+
+async function openFile(path: string) {
+  const content = await invoke<string>("read_text_file", { path });
+  fileView.value = { path, content };
+  closeDir();
+}
+
+function closeFile() {
+  fileView.value = null;
+}
+
+function displayName(entry: DirEntry) {
+  return entry.isDir ? entry.name + "/" : entry.name;
 }
 
 const middlePane = ref<HTMLElement | null>(null);
@@ -93,7 +111,7 @@ function recomputeLayout() {
     ? Math.ceil(gapEl.value.getBoundingClientRect().width)
     : 0;
   const layout = layoutColumns(
-    entries.value.map((e) => e.name),
+    entries.value.map(displayName),
     cachedWidths,
     available,
     gap
@@ -116,6 +134,7 @@ async function measureEntries() {
 }
 
 async function openDir() {
+  fileView.value = null;
   dirOpen.value = true;
   dirError.value = null;
   loading.value = true;
@@ -162,6 +181,7 @@ async function chooseDirectory() {
     });
     if (typeof picked === "string") {
       cwd.value = picked;
+      closeFile();
       if (dirOpen.value) await openDir();
     }
   } catch (e) {
@@ -178,6 +198,13 @@ function onDocPointerDown(e: PointerEvent) {
   ) {
     menuOpen.value = false;
   }
+  if (
+    fileView.value &&
+    !fileOverlay.value?.contains(target) &&
+    !dirHeader.value?.contains(target)
+  ) {
+    closeFile();
+  }
   if (!dirOpen.value) return;
   if (dropdown.value?.contains(target) || dirHeader.value?.contains(target)) {
     return;
@@ -188,6 +215,7 @@ function onDocPointerDown(e: PointerEvent) {
 function onKeyDown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     closeDir();
+    closeFile();
     menuOpen.value = false;
   }
 }
@@ -273,10 +301,14 @@ onUnmounted(() => {
             <FileName
               v-for="entry in entries"
               :key="entry.path"
-              :name="entry.name"
+              :name="displayName(entry)"
               :path="entry.path"
+              :open="openFile"
             />
           </div>
+        </div>
+        <div v-if="fileView" ref="fileOverlay" class="dir-dropdown file-view">
+          <pre class="file-content">{{ fileView.content }}</pre>
         </div>
       </div>
     </section>
@@ -400,6 +432,16 @@ body.dragging {
   background-color: #f6f6f6;
   border-bottom: 1px solid #888;
   z-index: 2;
+}
+
+.file-view {
+  overflow-x: auto;
+}
+
+.file-content {
+  margin: 0;
+  font: inherit;
+  white-space: pre;
 }
 
 .dir-grid {
