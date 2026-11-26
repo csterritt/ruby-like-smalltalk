@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { layoutColumns } from "./columns";
+import { clampStart, isPaged, nextStart, pageRows, prevStart } from "./pager";
 import FileName from "./components/FileName.vue";
 import GearIcon from "./components/GearIcon.vue";
 
@@ -68,17 +69,96 @@ interface DirEntry {
   isDir: boolean;
 }
 
-const fileView = ref<{ path: string; content: string } | null>(null);
+type FileDisplayRow =
+  | { kind: "line"; index: number; text: string }
+  | { kind: "bar"; id: "top" | "bottom" };
+
+const fileView = ref<{ path: string; fileId: number; lineCount: number } | null>(null);
 const fileOverlay = ref<HTMLElement | null>(null);
+const fileStart = ref(0);
+const paneRows = ref(0);
+const fileRows = ref<FileDisplayRow[]>([]);
+const BAR_TEXT = "● ".repeat(1000);
+let fileRowsRequest = 0;
 
 async function openFile(path: string) {
-  const content = await invoke<string>("read_text_file", { path });
-  fileView.value = { path, content };
+  const opened = await invoke<{ fileId: number; lineCount: number }>("open_text_file", { path });
+  fileRowsRequest++;
+  fileRows.value = [];
+  fileView.value = { path, ...opened };
+  fileStart.value = 0;
   closeDir();
+  await nextTick();
+  await document.fonts.ready;
+  computeFileRows();
+}
+
+async function refreshFileRows() {
+  const view = fileView.value;
+  const request = ++fileRowsRequest;
+  if (!view || paneRows.value <= 0) {
+    fileRows.value = [];
+    return;
+  }
+
+  const rows = pageRows(view.lineCount, paneRows.value, fileStart.value);
+  const indices = rows.flatMap((row) => row.kind === "line" ? [row.index] : []);
+  try {
+    const lines = indices.length === 0
+      ? []
+      : await invoke<string[]>("read_text_lines", { fileId: view.fileId, indices });
+    if (request !== fileRowsRequest || fileView.value?.fileId !== view.fileId) return;
+    let linePos = 0;
+    fileRows.value = rows.map((row) =>
+      row.kind === "line"
+        ? { kind: "line", index: row.index, text: lines[linePos++] }
+        : row
+    );
+  } catch (error) {
+    if (request === fileRowsRequest) {
+      console.error("read file lines failed:", error);
+    }
+  }
+}
+
+const filePaged = computed(() =>
+  fileView.value
+    ? isPaged(fileView.value.lineCount, paneRows.value)
+    : false
+);
+
+function computeFileRows() {
+  const body = dirBody.value;
+  const overlay = fileOverlay.value;
+  const measure = rowMeasure.value;
+  if (!body || !overlay || !measure) return;
+  const cs = getComputedStyle(overlay);
+  const avail =
+    body.clientHeight -
+    parseFloat(cs.paddingTop) -
+    parseFloat(cs.paddingBottom) -
+    parseFloat(cs.borderTopWidth) -
+    parseFloat(cs.borderBottomWidth);
+  const rowH = measure.getBoundingClientRect().height;
+  paneRows.value = rowH > 0 ? Math.floor(avail / rowH) : 0;
+  fileStart.value = clampStart(
+    fileView.value?.lineCount ?? 0,
+    paneRows.value,
+    fileStart.value
+  );
+  if (fileView.value) void refreshFileRows();
 }
 
 function closeFile() {
+  const view = fileView.value;
+  fileRowsRequest++;
+  fileRows.value = [];
   fileView.value = null;
+  if (view) {
+    void invoke("close_text_file", { fileId: view.fileId }).catch((error) => {
+      console.error("close file failed:", error);
+    });
+  }
 }
 
 function displayName(entry: DirEntry) {
@@ -86,6 +166,8 @@ function displayName(entry: DirEntry) {
 }
 
 const middlePane = ref<HTMLElement | null>(null);
+const dirBody = ref<HTMLElement | null>(null);
+const rowMeasure = ref<HTMLElement | null>(null);
 const dirHeader = ref<HTMLElement | null>(null);
 const dropdown = ref<HTMLElement | null>(null);
 const gridEl = ref<HTMLElement | null>(null);
@@ -150,7 +232,7 @@ async function showEntries(list: DirEntry[]) {
 }
 
 async function openDir() {
-  fileView.value = null;
+  closeFile();
   dirOpen.value = true;
   dirError.value = null;
   loading.value = true;
@@ -237,6 +319,16 @@ function onKeyDown(e: KeyboardEvent) {
     closeDir();
     closeFile();
     menuOpen.value = false;
+    return;
+  }
+  if (fileView.value && (e.key === "PageDown" || e.key === "PageUp")) {
+    e.preventDefault();
+    const L = fileView.value.lineCount;
+    fileStart.value =
+      e.key === "PageDown"
+        ? nextStart(L, paneRows.value, fileStart.value)
+        : prevStart(L, paneRows.value, fileStart.value);
+    void refreshFileRows();
   }
 }
 
@@ -270,6 +362,7 @@ onMounted(async () => {
   if (middlePane.value) {
     resizeObserver = new ResizeObserver(() => {
       if (dirOpen.value) recomputeLayout();
+      if (fileView.value) computeFileRows();
     });
     resizeObserver.observe(middlePane.value);
   }
@@ -306,7 +399,7 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-      <div class="dir-body">
+      <div ref="dirBody" class="dir-body">
         <div v-if="dirOpen" ref="dropdown" class="dir-dropdown">
           <span ref="gapEl" class="gap-measure" aria-hidden="true">{{ "  " }}</span>
           <div v-if="dirError" class="dir-message">{{ dirError }}</div>
@@ -327,8 +420,23 @@ onUnmounted(() => {
             />
           </div>
         </div>
-        <div v-if="fileView" ref="fileOverlay" class="dir-dropdown file-view">
-          <pre class="file-content">{{ fileView.content }}</pre>
+        <div
+          v-if="fileView"
+          ref="fileOverlay"
+          class="dir-dropdown file-view"
+          :class="{ paged: filePaged }"
+        >
+          <div ref="rowMeasure" class="file-row row-measure" aria-hidden="true">{{ " " }}</div>
+          <div v-if="fileView.lineCount === 0" class="dir-message">(empty)</div>
+          <div v-else class="file-content">
+            <template
+              v-for="row in fileRows"
+              :key="row.kind === 'line' ? `l${row.index}` : `bar-${row.id}`"
+            >
+              <div v-if="row.kind === 'line'" class="file-row">{{ row.text || " " }}</div>
+              <div v-else class="file-row file-bar" aria-hidden="true">{{ BAR_TEXT }}</div>
+            </template>
+          </div>
         </div>
       </div>
     </section>
@@ -458,10 +566,31 @@ body.dragging {
   overflow-x: auto;
 }
 
+.file-view.paged {
+  overflow-y: hidden;
+}
+
 .file-content {
-  margin: 0;
-  font: inherit;
+  width: max-content;
+  min-width: 100%;
+}
+
+.file-row {
   white-space: pre;
+}
+
+.row-measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.file-bar {
+  width: 0;
+  min-width: 100%;
+  overflow: hidden;
+  color: #f6f6f6;
+  background-color: #0f0f0f;
 }
 
 .dir-grid {
@@ -530,6 +659,11 @@ body.dragging {
   .dir-menu {
     background-color: #2f2f2f;
     border-color: #777;
+  }
+
+  .file-bar {
+    color: #2f2f2f;
+    background-color: #f6f6f6;
   }
 
   .divider,
