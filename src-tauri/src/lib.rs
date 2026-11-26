@@ -1,4 +1,7 @@
-use tauri::{Manager, PhysicalSize};
+use tauri::{
+    menu::{MenuItem, MenuItemKind, PredefinedMenuItem, Submenu},
+    Emitter, Manager, PhysicalSize,
+};
 
 #[tauri::command]
 fn current_dir() -> Result<String, String> {
@@ -33,8 +36,37 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![current_dir, list_dir])
+        .on_menu_event(|app, event| {
+            if event.id() == "open" {
+                let _ = app.emit("menu-open", ());
+            }
+        })
         .setup(|app| {
+            let menu = tauri::menu::Menu::default(app.handle())?;
+            let open_item =
+                MenuItem::with_id(app, "open", "Open...", true, Some("CmdOrCtrl+O"))?;
+            let mut file_menu = None;
+            for item in menu.items()? {
+                if let MenuItemKind::Submenu(s) = item {
+                    if s.text()? == "File" {
+                        file_menu = Some(s);
+                        break;
+                    }
+                }
+            }
+            if let Some(file_menu) = file_menu {
+                file_menu.insert(&open_item, 0)?;
+                file_menu.insert(&PredefinedMenuItem::separator(app)?, 1)?;
+            } else {
+                menu.insert(
+                    &Submenu::with_items(app, "File", true, &[&open_item])?,
+                    0,
+                )?;
+            }
+            app.set_menu(menu)?;
+
             let window = app
                 .get_webview_window("main")
                 .expect("main window should exist");
