@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { invoke } from "@tauri-apps/api/core";
+import { layoutColumns } from "./columns";
+import FileName from "./components/FileName.vue";
 
 const LINE_WIDTH = 1;
+const FONT_FAMILY = '"Maple Mono NF"';
+const FONT_SIZE = "14pt";
 
 const container = ref<HTMLElement | null>(null);
 const leftFraction = ref(0.2);
@@ -43,6 +48,150 @@ function startDrag(side: Side, event: PointerEvent) {
   handle.addEventListener("pointercancel", onUp);
   document.body.classList.add("dragging");
 }
+
+const cwd = ref("");
+const dirOpen = ref(false);
+const dirError = ref<string | null>(null);
+const loading = ref(false);
+const measuring = ref(false);
+const entries = ref<DirEntry[]>([]);
+const rows = ref(0);
+const colWidths = ref<number[]>([]);
+const columnGap = ref(0);
+
+interface DirEntry {
+  name: string;
+  path: string;
+}
+
+const middlePane = ref<HTMLElement | null>(null);
+const dirHeader = ref<HTMLElement | null>(null);
+const dropdown = ref<HTMLElement | null>(null);
+const gridEl = ref<HTMLElement | null>(null);
+const gapEl = ref<HTMLElement | null>(null);
+
+let cachedWidths: number[] = [];
+
+function recomputeLayout() {
+  const el = dropdown.value;
+  if (!el || entries.value.length === 0) {
+    rows.value = 0;
+    colWidths.value = [];
+    return;
+  }
+  const style = getComputedStyle(el);
+  const hPad =
+    parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+  const available = el.clientWidth - hPad;
+  const gap = gapEl.value
+    ? Math.ceil(gapEl.value.getBoundingClientRect().width)
+    : 0;
+  const layout = layoutColumns(
+    entries.value.map((e) => e.name),
+    cachedWidths,
+    available,
+    gap
+  );
+  rows.value = layout.rows;
+  colWidths.value = layout.colWidths;
+  columnGap.value = gap;
+}
+
+async function measureEntries() {
+  await document.fonts.ready;
+  await nextTick();
+  const el = gridEl.value;
+  if (!el) return;
+  cachedWidths = Array.from(el.querySelectorAll(".file-name")).map(
+    (item) => Math.ceil(item.getBoundingClientRect().width) + 1
+  );
+  measuring.value = false;
+  recomputeLayout();
+}
+
+async function openDir() {
+  dirOpen.value = true;
+  dirError.value = null;
+  loading.value = true;
+  entries.value = [];
+  let names: DirEntry[];
+  try {
+    names = await invoke<DirEntry[]>("list_dir", { path: cwd.value });
+  } catch (e) {
+    dirError.value = String(e);
+    loading.value = false;
+    return;
+  }
+  names.sort((a, b) => a.name.localeCompare(b.name));
+  loading.value = false;
+  if (names.length === 0) {
+    entries.value = names;
+    return;
+  }
+  measuring.value = true;
+  entries.value = names;
+  await measureEntries();
+}
+
+function closeDir() {
+  dirOpen.value = false;
+}
+
+function toggleDir() {
+  if (dirOpen.value) closeDir();
+  else openDir();
+}
+
+function onDocPointerDown(e: PointerEvent) {
+  if (!dirOpen.value) return;
+  const target = e.target as Node;
+  if (dropdown.value?.contains(target) || dirHeader.value?.contains(target)) {
+    return;
+  }
+  closeDir();
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape") closeDir();
+}
+
+const gridStyle = computed(() => ({
+  gridTemplateColumns: colWidths.value
+    .map((w) => `${w}px`)
+    .join(" "),
+  gridTemplateRows: `repeat(${rows.value}, auto)`,
+  columnGap: `${columnGap.value}px`,
+}));
+
+let resizeObserver: ResizeObserver | null = null;
+
+onMounted(async () => {
+  const root = document.documentElement;
+  root.style.setProperty("--app-font-family", FONT_FAMILY);
+  root.style.setProperty("--app-font-size", FONT_SIZE);
+
+  try {
+    cwd.value = await invoke<string>("current_dir");
+  } catch (e) {
+    cwd.value = String(e);
+  }
+
+  document.addEventListener("pointerdown", onDocPointerDown);
+  document.addEventListener("keydown", onKeyDown);
+
+  if (middlePane.value) {
+    resizeObserver = new ResizeObserver(() => {
+      if (dirOpen.value) recomputeLayout();
+    });
+    resizeObserver.observe(middlePane.value);
+  }
+});
+
+onUnmounted(() => {
+  document.removeEventListener("pointerdown", onDocPointerDown);
+  document.removeEventListener("keydown", onKeyDown);
+  resizeObserver?.disconnect();
+});
 </script>
 
 <template>
@@ -51,7 +200,30 @@ function startDrag(side: Side, event: PointerEvent) {
     <div class="divider">
       <div class="handle" @pointerdown.prevent="startDrag('left', $event)"></div>
     </div>
-    <section class="pane middle"></section>
+    <section ref="middlePane" class="pane middle">
+      <div ref="dirHeader" class="dir-header" @click="toggleDir">{{ cwd }}</div>
+      <div class="dir-body">
+        <div v-if="dirOpen" ref="dropdown" class="dir-dropdown">
+          <span ref="gapEl" class="gap-measure" aria-hidden="true">{{ "  " }}</span>
+          <div v-if="dirError" class="dir-message">{{ dirError }}</div>
+          <div v-else-if="!loading && entries.length === 0" class="dir-message">(empty)</div>
+          <div
+            v-else-if="!loading"
+            ref="gridEl"
+            class="dir-grid"
+            :class="{ measuring }"
+            :style="gridStyle"
+          >
+            <FileName
+              v-for="entry in entries"
+              :key="entry.path"
+              :name="entry.name"
+              :path="entry.path"
+            />
+          </div>
+        </div>
+      </div>
+    </section>
     <div class="divider">
       <div class="handle" @pointerdown.prevent="startDrag('right', $event)"></div>
     </div>
@@ -69,7 +241,8 @@ body,
 }
 
 body {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-family: var(--app-font-family, "Maple Mono NF"), monospace;
+  font-size: var(--app-font-size, 14pt);
   color: #0f0f0f;
   background-color: #f6f6f6;
 }
@@ -92,6 +265,63 @@ body.dragging {
 
 .pane.middle {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.dir-header {
+  flex: none;
+  padding: 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid #888;
+  cursor: pointer;
+}
+
+.dir-body {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.dir-dropdown {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 4px 8px;
+  background-color: #f6f6f6;
+  border-bottom: 1px solid #888;
+  z-index: 2;
+}
+
+.dir-grid {
+  display: grid;
+  grid-auto-flow: column;
+  justify-items: start;
+}
+
+.dir-grid.measuring {
+  display: flex;
+  flex-wrap: nowrap;
+  visibility: hidden;
+}
+
+.dir-grid.measuring > * {
+  flex: none;
+}
+
+.gap-measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
 }
 
 .divider {
@@ -122,6 +352,15 @@ body.dragging {
 @media (prefers-color-scheme: dark) {
   body {
     color: #f6f6f6;
+    background-color: #2f2f2f;
+  }
+
+  .dir-header,
+  .dir-dropdown {
+    border-bottom-color: #777;
+  }
+
+  .dir-dropdown {
     background-color: #2f2f2f;
   }
 
