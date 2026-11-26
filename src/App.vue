@@ -1,160 +1,137 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 
-const greetMsg = ref("");
-const name = ref("");
+const LINE_WIDTH = 1;
 
-async function greet() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsg.value = await invoke("greet", { name: name.value });
+const container = ref<HTMLElement | null>(null);
+const leftFraction = ref(0.2);
+const rightFraction = ref(0.2);
+
+type Side = "left" | "right";
+
+function startDrag(side: Side, event: PointerEvent) {
+  const el = container.value;
+  if (!el) return;
+  const handle = event.currentTarget as HTMLElement;
+  handle.setPointerCapture(event.pointerId);
+
+  const width = el.getBoundingClientRect().width;
+  const startX = event.clientX;
+  const startLeft = leftFraction.value * width;
+  const startRight = rightFraction.value * width;
+
+  const onMove = (e: PointerEvent) => {
+    const dx = e.clientX - startX;
+    if (side === "left") {
+      const max = width - startRight - 2 * LINE_WIDTH;
+      leftFraction.value = Math.min(Math.max(startLeft + dx, 0), max) / width;
+    } else {
+      const max = width - leftFraction.value * width - 2 * LINE_WIDTH;
+      rightFraction.value = Math.min(Math.max(startRight - dx, 0), max) / width;
+    }
+  };
+  const onUp = (e: PointerEvent) => {
+    handle.releasePointerCapture(e.pointerId);
+    handle.removeEventListener("pointermove", onMove);
+    handle.removeEventListener("pointerup", onUp);
+    handle.removeEventListener("pointercancel", onUp);
+    document.body.classList.remove("dragging");
+  };
+
+  handle.addEventListener("pointermove", onMove);
+  handle.addEventListener("pointerup", onUp);
+  handle.addEventListener("pointercancel", onUp);
+  document.body.classList.add("dragging");
 }
 </script>
 
 <template>
-  <main class="container">
-    <h1>Welcome to Tauri + Vue</h1>
-
-    <div class="row">
-      <a href="https://vite.dev" target="_blank">
-        <img src="/vite.svg" class="logo vite" alt="Vite logo" />
-      </a>
-      <a href="https://tauri.app" target="_blank">
-        <img src="/tauri.svg" class="logo tauri" alt="Tauri logo" />
-      </a>
-      <a href="https://vuejs.org/" target="_blank">
-        <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-      </a>
+  <div ref="container" class="panes">
+    <section class="pane" :style="{ width: `${leftFraction * 100}%` }"></section>
+    <div class="divider">
+      <div class="handle" @pointerdown.prevent="startDrag('left', $event)"></div>
     </div>
-    <p>Click on the Tauri, Vite, and Vue logos to learn more.</p>
-
-    <form class="row" @submit.prevent="greet">
-      <input id="greet-input" v-model="name" placeholder="Enter a name..." />
-      <button type="submit">Greet</button>
-    </form>
-    <p>{{ greetMsg }}</p>
-  </main>
+    <section class="pane middle"></section>
+    <div class="divider">
+      <div class="handle" @pointerdown.prevent="startDrag('right', $event)"></div>
+    </div>
+    <section class="pane" :style="{ width: `${rightFraction * 100}%` }"></section>
+  </div>
 </template>
 
-<style scoped>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #249b73);
-}
-
-</style>
 <style>
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
 
+body {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   color: #0f0f0f;
   background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
 }
 
-.container {
-  margin: 0;
-  padding-top: 10vh;
+body.dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.panes {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  height: 100%;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
+.pane {
+  flex: none;
+  min-width: 0;
+  overflow: auto;
 }
 
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
+.pane.middle {
+  flex: 1;
 }
 
-.row {
-  display: flex;
-  justify-content: center;
+.divider {
+  position: relative;
+  flex: none;
+  width: 1px;
+  background-color: #888;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+.handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+  background-color: #888;
+  border-radius: 3px;
+  cursor: col-resize;
+  z-index: 1;
+  touch-action: none;
 }
 
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
+.handle:hover {
+  background-color: #555;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  body {
     color: #f6f6f6;
     background-color: #2f2f2f;
   }
 
-  a:hover {
-    color: #24c8db;
+  .divider,
+  .handle {
+    background-color: #777;
   }
 
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
+  .handle:hover {
+    background-color: #aaa;
   }
 }
-
 </style>
