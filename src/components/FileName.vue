@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from "vue";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 const props = defineProps<{
   name: string;
   path: string;
-  open?: (path: string) => Promise<void>;
+  open?: () => Promise<void>;
 }>();
 
 const POPUP_MS = 2000;
+const CLICK_DELAY_MS = 400;
 const popup = ref<{
   x: number;
   y: number;
@@ -15,6 +17,7 @@ const popup = ref<{
   kind: "info" | "error";
 } | null>(null);
 let popupTimer: ReturnType<typeof setTimeout> | undefined;
+let clickTimer: ReturnType<typeof setTimeout> | undefined;
 
 function hidePopup() {
   clearTimeout(popupTimer);
@@ -34,24 +37,34 @@ function showPopup(rect: DOMRect, message: string, kind: "info" | "error") {
 
 function onClick(e: MouseEvent) {
   if (e.button !== 0) return;
-  navigator.clipboard
-    .writeText(props.path)
-    .catch((err) => console.error("copy path failed:", err));
+  if (e.detail > 1) {
+    clearTimeout(clickTimer);
+    return;
+  }
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  showPopup(rect, "Path Copied!", "info");
+  clickTimer = setTimeout(() => {
+    writeText(props.path).catch((err) =>
+      console.error("copy path failed:", err)
+    );
+    showPopup(rect, "Path Copied!", "info");
+  }, CLICK_DELAY_MS);
 }
 
 async function onDblClick(e: MouseEvent) {
+  clearTimeout(clickTimer);
   if (e.button !== 0 || !props.open) return;
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   try {
-    await props.open(props.path);
+    await props.open();
   } catch (err) {
     showPopup(rect, String(err), "error");
   }
 }
 
-onBeforeUnmount(hidePopup);
+onBeforeUnmount(() => {
+  clearTimeout(clickTimer);
+  hidePopup();
+});
 </script>
 
 <template>

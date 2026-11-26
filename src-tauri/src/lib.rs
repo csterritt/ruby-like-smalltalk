@@ -33,6 +33,16 @@ fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
             });
         }
     }
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        items.insert(
+            0,
+            DirEntry {
+                name: "..".to_string(),
+                path: parent.to_string_lossy().into_owned(),
+                is_dir: true,
+            },
+        );
+    }
     Ok(items)
 }
 
@@ -56,6 +66,7 @@ fn read_text_file(path: String) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .invoke_handler(tauri::generate_handler![current_dir, list_dir, read_text_file])
         .on_menu_event(|app, event| {
             if event.id() == "open" {

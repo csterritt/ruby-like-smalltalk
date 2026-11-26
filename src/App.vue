@@ -133,29 +133,49 @@ async function measureEntries() {
   recomputeLayout();
 }
 
+async function showEntries(list: DirEntry[]) {
+  list.sort(
+    (a, b) =>
+      Number(b.name === "..") - Number(a.name === "..") ||
+      a.name.localeCompare(b.name)
+  );
+  loading.value = false;
+  if (list.length === 0) {
+    entries.value = list;
+    return;
+  }
+  measuring.value = true;
+  entries.value = list;
+  await measureEntries();
+}
+
 async function openDir() {
   fileView.value = null;
   dirOpen.value = true;
   dirError.value = null;
   loading.value = true;
   entries.value = [];
-  let names: DirEntry[];
+  let list: DirEntry[];
   try {
-    names = await invoke<DirEntry[]>("list_dir", { path: cwd.value });
+    list = await invoke<DirEntry[]>("list_dir", { path: cwd.value });
   } catch (e) {
     dirError.value = String(e);
     loading.value = false;
     return;
   }
-  names.sort((a, b) => a.name.localeCompare(b.name));
-  loading.value = false;
-  if (names.length === 0) {
-    entries.value = names;
-    return;
-  }
-  measuring.value = true;
-  entries.value = names;
-  await measureEntries();
+  await showEntries(list);
+}
+
+async function enterDir(path: string) {
+  const list = await invoke<DirEntry[]>("list_dir", { path });
+  cwd.value = path;
+  dirError.value = null;
+  if (dropdown.value) dropdown.value.scrollTop = 0;
+  await showEntries(list);
+}
+
+function openEntry(entry: DirEntry) {
+  return entry.isDir ? enterDir(entry.path) : openFile(entry.path);
 }
 
 function closeDir() {
@@ -303,7 +323,7 @@ onUnmounted(() => {
               :key="entry.path"
               :name="displayName(entry)"
               :path="entry.path"
-              :open="openFile"
+              :open="() => openEntry(entry)"
             />
           </div>
         </div>
