@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { layoutColumns } from "./columns";
-import { clampStart, isPaged, nextStart, pageRows, prevStart } from "./pager";
+import { clampStart, isPaged, lineDownStart, lineUpStart, nextStart, pageRows, prevStart } from "./pager";
 import FileName from "./components/FileName.vue";
 import GearIcon from "./components/GearIcon.vue";
 
@@ -80,6 +80,13 @@ const paneRows = ref(0);
 const fileRows = ref<FileDisplayRow[]>([]);
 const BAR_TEXT = "● ".repeat(1000);
 let fileRowsRequest = 0;
+let wheelLines = 0;
+
+function scrollFileTo(start: number) {
+  if (start === fileStart.value) return;
+  fileStart.value = start;
+  void refreshFileRows();
+}
 
 async function openFile(path: string) {
   const opened = await invoke<{ fileId: number; lineCount: number }>("open_text_file", { path });
@@ -87,6 +94,7 @@ async function openFile(path: string) {
   fileRows.value = [];
   fileView.value = { path, ...opened };
   fileStart.value = 0;
+  wheelLines = 0;
   closeDir();
   await nextTick();
   await document.fonts.ready;
@@ -154,6 +162,7 @@ function closeFile() {
   fileRowsRequest++;
   fileRows.value = [];
   fileView.value = null;
+  wheelLines = 0;
   if (view) {
     void invoke("close_text_file", { fileId: view.fileId }).catch((error) => {
       console.error("close file failed:", error);
@@ -324,12 +333,51 @@ function onKeyDown(e: KeyboardEvent) {
   if (fileView.value && (e.key === "PageDown" || e.key === "PageUp")) {
     e.preventDefault();
     const L = fileView.value.lineCount;
-    fileStart.value =
+    scrollFileTo(
       e.key === "PageDown"
         ? nextStart(L, paneRows.value, fileStart.value)
-        : prevStart(L, paneRows.value, fileStart.value);
-    void refreshFileRows();
+        : prevStart(L, paneRows.value, fileStart.value)
+    );
   }
+  if (fileView.value && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    e.preventDefault();
+    const L = fileView.value.lineCount;
+    scrollFileTo(
+      e.key === "ArrowDown"
+        ? lineDownStart(L, paneRows.value, fileStart.value)
+        : lineUpStart(L, paneRows.value, fileStart.value)
+    );
+  }
+}
+
+function onFileWheel(e: WheelEvent) {
+  const view = fileView.value;
+  if (!view || !filePaged.value) return;
+  if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+  e.preventDefault();
+
+  let delta: number;
+  if (e.deltaMode === 1) {
+    delta = e.deltaY;
+  } else if (e.deltaMode === 2) {
+    delta = e.deltaY * (paneRows.value - 4);
+  } else {
+    const rowHeight = rowMeasure.value?.getBoundingClientRect().height;
+    delta = e.deltaY / (rowHeight && rowHeight > 0 ? rowHeight : 20);
+  }
+  wheelLines += delta;
+  const steps = Math.trunc(wheelLines);
+  if (steps === 0) return;
+  wheelLines -= steps;
+
+  const L = view.lineCount;
+  let start = fileStart.value;
+  for (let i = 0; i < Math.abs(steps); i++) {
+    start = steps > 0
+      ? lineDownStart(L, paneRows.value, start)
+      : lineUpStart(L, paneRows.value, start);
+  }
+  scrollFileTo(start);
 }
 
 const gridStyle = computed(() => ({
@@ -425,6 +473,7 @@ onUnmounted(() => {
           ref="fileOverlay"
           class="dir-dropdown file-view"
           :class="{ paged: filePaged }"
+          @wheel="onFileWheel"
         >
           <div ref="rowMeasure" class="file-row row-measure" aria-hidden="true">{{ " " }}</div>
           <div v-if="fileView.lineCount === 0" class="dir-message">(empty)</div>

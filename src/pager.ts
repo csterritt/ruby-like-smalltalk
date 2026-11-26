@@ -44,3 +44,13 @@ export function prevStart(L: number, N: number, s: number): number {
   if (s <= N - 2) return 0;
   return Math.max(s - (N - 4), N - 2);
 }
+
+export function lineDownStart(L: number, N: number, s: number): number {
+  s = clampStart(L, N, s);
+  return clampStart(L, N, s === 0 ? 3 : s + 1);
+}
+
+export function lineUpStart(L: number, N: number, s: number): number {
+  s = clampStart(L, N, s);
+  return s <= 3 ? 0 : s - 1;
+}
