@@ -22,10 +22,25 @@ class RLS__Driver
     @class_src = {}
     @seen_order = {}
     @next_seq = 0
+    @eval_requires = []
+  end
+
+  def note_require(name)
+    text = "require #{name.to_s.inspect}"
+    @eval_requires << text unless @eval_requires.include?(text)
   end
 
   def run
     trap("INT") { raise Interrupt if @busy }
+    drv = self
+    main = TOPLEVEL_BINDING.receiver
+    main.define_singleton_method(:require) do |name|
+      r = super(name)
+      loc = caller_locations(1, 1)&.first
+      drv.__send__(:note_require, name) if loc && loc.path == "(rls)"
+      r
+    end
+    main.singleton_class.__send__(:private, :require)
     sock = UNIXSocket.new(ENV.fetch("RLS_CONTROL"))
     sock.puts(JSON.generate({ op: "hello", version: RUBY_DESCRIPTION, pid: Process.pid }))
     sock.each_line do |line|
@@ -65,6 +80,7 @@ class RLS__Driver
 
   def eval_entry(sock, id, code)
     @busy = true
+    @eval_requires = []
     before = rls_methods
     status =
       begin
@@ -194,6 +210,7 @@ class RLS__Driver
       },
       classes: rls_classes,
       methods: rls_methods_snapshot,
+      requires: @eval_requires.map { |t| { name: t, text: t, code: t } },
     }
   end
 

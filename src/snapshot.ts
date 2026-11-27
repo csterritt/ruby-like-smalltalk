@@ -5,6 +5,7 @@ export interface Entry {
 }
 
 export interface Snapshot {
+  requires?: Entry[];
   locals: Entry[];
   ivars: Entry[];
   classes: Entry[];
@@ -16,14 +17,14 @@ export interface PaneEntry extends Entry {
 }
 
 export interface Panes {
-  locals: PaneEntry[];
-  ivars: PaneEntry[];
+  requires: PaneEntry[];
+  vars: PaneEntry[];
   classes: PaneEntry[];
   methods: PaneEntry[];
 }
 
 export function emptyPanes(): Panes {
-  return { locals: [], ivars: [], classes: [], methods: [] };
+  return { requires: [], vars: [], classes: [], methods: [] };
 }
 
 function mergeArea(prev: PaneEntry[], snap: Entry[]): PaneEntry[] {
@@ -39,10 +40,25 @@ function mergeArea(prev: PaneEntry[], snap: Entry[]): PaneEntry[] {
   return out;
 }
 
+function addRequires(prev: PaneEntry[], incoming: Entry[]): PaneEntry[] {
+  const out = prev.map((p) => ({ ...p }));
+  const byName = new Map(out.map((p, i) => [p.name, i]));
+  for (const e of incoming) {
+    const idx = byName.get(e.name);
+    if (idx !== undefined) {
+      out[idx] = { ...e, stale: false };
+    } else {
+      byName.set(e.name, out.length);
+      out.push({ ...e, stale: false });
+    }
+  }
+  return out;
+}
+
 export function mergePanes(prev: Panes, snap: Snapshot): Panes {
   return {
-    locals: mergeArea(prev.locals, snap.locals),
-    ivars: mergeArea(prev.ivars, snap.ivars),
+    requires: addRequires(prev.requires, snap.requires ?? []),
+    vars: mergeArea(prev.vars, [...snap.locals, ...snap.ivars]),
     classes: mergeArea(prev.classes, snap.classes),
     methods: mergeArea(prev.methods, snap.methods),
   };
@@ -50,8 +66,8 @@ export function mergePanes(prev: Panes, snap: Snapshot): Panes {
 
 export function staleAll(prev: Panes): Panes {
   return {
-    locals: prev.locals.map((e) => ({ ...e, stale: true })),
-    ivars: prev.ivars.map((e) => ({ ...e, stale: true })),
+    requires: prev.requires.map((e) => ({ ...e, stale: true })),
+    vars: prev.vars.map((e) => ({ ...e, stale: true })),
     classes: prev.classes.map((e) => ({ ...e, stale: true })),
     methods: prev.methods.map((e) => ({ ...e, stale: true })),
   };

@@ -731,8 +731,8 @@ onUnmounted(() => {
 <template>
   <div ref="container" class="panes">
     <section class="pane side" :style="{ width: `${leftFraction * 100}%` }">
-      <div class="area"><div v-if="!panes.locals.length" class="area-hint">Variables</div><VarList :entries="panes.locals" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('locals', e, ev)" /></div>
-      <div class="area"><div v-if="!panes.ivars.length" class="area-hint">@ variables</div><VarList :entries="panes.ivars" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('ivars', e, ev)" /></div>
+      <div class="area"><div v-if="!panes.requires.length" class="area-hint">Requires</div><VarList :entries="panes.requires" plain @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('requires', e, ev)" /></div>
+      <div class="area"><div v-if="!panes.vars.length" class="area-hint">Variables</div><VarList :entries="panes.vars" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('vars', e, ev)" /></div>
       <div class="area"><div v-if="!panes.classes.length" class="area-hint">Classes</div><CodeList :entries="panes.classes" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('classes', e, ev)" /></div>
     </section>
     <div class="divider">

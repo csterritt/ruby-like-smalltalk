@@ -25,6 +25,6 @@ export type EditorResult = { ok: true } | { ok: false; error: string };
 
 export function editorText(area: keyof Panes, entry: PaneEntry): string {
   if (entry.code) return entry.code;
-  if (area === "locals" || area === "ivars") return `${entry.name} = ${entry.text}`;
+  if (area === "vars") return `${entry.name} = ${entry.text}`;
   return entry.text;
 }

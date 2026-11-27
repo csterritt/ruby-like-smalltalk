@@ -2,7 +2,7 @@
 import { ref } from "vue";
 import type { PaneEntry } from "../snapshot";
 
-defineProps<{ entries: PaneEntry[] }>();
+defineProps<{ entries: PaneEntry[]; plain?: boolean }>();
 const emit = defineEmits<{
   restore: [PaneEntry];
   menu: [PaneEntry, MouseEvent];
@@ -37,7 +37,7 @@ function onDblClick(entry: PaneEntry) {
       @keydown="onKey"
       @dblclick="onDblClick(entry)"
       @contextmenu.prevent="emit('menu', entry, $event)"
-    >{{ entry.name }} = {{ entry.text }}</div>
+    >{{ plain ? entry.text : `${entry.name} = ${entry.text}` }}</div>
   </div>
 </template>
 

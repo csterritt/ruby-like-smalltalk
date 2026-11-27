@@ -30,13 +30,13 @@ function result(m: ConsoleModel, ev: Partial<Extract<RubyEvent, { type: "result"
 
 test("editorText picks code, then 'name = text', then text", () => {
   expect(
-    editorText("locals", { name: "x", text: "14", code: "x = 14", stale: false }),
+    editorText("vars", { name: "x", text: "14", code: "x = 14", stale: false }),
   ).toBe("x = 14");
   expect(
-    editorText("locals", { name: "o", text: "#<Object>", stale: false }),
+    editorText("vars", { name: "o", text: "#<Object>", stale: false }),
   ).toBe("o = #<Object>");
   expect(
-    editorText("ivars", { name: "@s", text: "10", stale: false }),
+    editorText("vars", { name: "@s", text: "10", stale: false }),
   ).toBe("@s = 10");
   expect(
     editorText("classes", { name: "Bar", text: "class Bar", stale: false }),
@@ -49,6 +49,14 @@ test("editorText picks code, then 'name = text', then text", () => {
       stale: false,
     }),
   ).toBe("def sq(n) = n * n");
+  expect(
+    editorText("requires", {
+      name: 'require "json"',
+      text: 'require "json"',
+      code: 'require "json"',
+      stale: false,
+    }),
+  ).toBe('require "json"');
 });
 
 test("submit ok resolves {ok:true}, evals code, echoes input", async () => {

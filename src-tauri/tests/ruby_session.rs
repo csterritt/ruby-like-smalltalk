@@ -1095,3 +1095,55 @@ fn v11_undef_and_remove_const() {
     );
     scn.finish();
 }
+
+#[test]
+fn v12_requires_snapshot() {
+    let mut scn = Scn::new(
+        "V12",
+        "S15",
+        "requires executed during an eval are reported",
+        "json listed once; per-eval; failures not noted; require not a method",
+    );
+    let ev = scn.eval_and_wait("require \"json\"").unwrap_or_default();
+    scn.expect_eq(
+        snap_entries(&ev, "requires"),
+        vec![(
+            "require \"json\"".to_string(),
+            "require \"json\"".to_string(),
+        )],
+        "requires after json",
+    );
+    scn.expect_eq(
+        snap_code(&ev, "requires", "require \"json\""),
+        Some("require \"json\"".to_string()),
+        "require code",
+    );
+
+    let ev = scn.eval_and_wait("1 + 1").unwrap_or_default();
+    scn.expect_eq(snap_entries(&ev, "requires"), vec![], "requires next eval");
+
+    let ev = scn
+        .eval_and_wait("require \"nonexistent_rls_xyz\"")
+        .unwrap_or_default();
+    scn.expect_eq(status_of(&ev), Some("error".to_string()), "bad require status");
+    scn.expect_eq(snap_entries(&ev, "requires"), vec![], "bad require noted");
+
+    let ev = scn
+        .eval_and_wait("require \"set\"; raise \"boom\"")
+        .unwrap_or_default();
+    scn.expect_eq(status_of(&ev), Some("error".to_string()), "raise status");
+    scn.expect_eq(
+        snap_entries(&ev, "requires"),
+        vec![(
+            "require \"set\"".to_string(),
+            "require \"set\"".to_string(),
+        )],
+        "require before raise noted",
+    );
+
+    scn.check(
+        !snap_entries(&ev, "methods").iter().any(|(n, _)| n == "require"),
+        "require appears in methods".to_string(),
+    );
+    scn.finish();
+}
