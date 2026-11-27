@@ -274,7 +274,7 @@ fn pipe_reader(inner: Arc<Inner>, generation: u64, stream: Stream, mut rd: impl 
         let n = match rd.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
-            Err(e) => {
+            Err(_) => {
                 break;
             }
         };
