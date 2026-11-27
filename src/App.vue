@@ -245,6 +245,7 @@ function navigate(step: (g: Geom, p: Pos) => Pos) {
 }
 
 function toggleLineWrap() {
+  menuOpen.value = false;
   queueFileOp(async () => {
     lineWrap.value = !lineWrap.value;
     lineHeights.clear();
