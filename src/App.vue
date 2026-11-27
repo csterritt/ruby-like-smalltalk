@@ -593,9 +593,9 @@ onUnmounted(() => {
 <template>
   <div ref="container" class="panes">
     <section class="pane side" :style="{ width: `${leftFraction * 100}%` }">
-      <div class="area"><VarList :entries="snapshot.locals" /></div>
-      <div class="area"><VarList :entries="snapshot.ivars" /></div>
-      <div class="area"><CodeList :entries="snapshot.classes" /></div>
+      <div class="area"><div v-if="!snapshot.locals.length" class="area-hint">Variables</div><VarList :entries="snapshot.locals" /></div>
+      <div class="area"><div v-if="!snapshot.ivars.length" class="area-hint">@ variables</div><VarList :entries="snapshot.ivars" /></div>
+      <div class="area"><div v-if="!snapshot.classes.length" class="area-hint">Classes</div><CodeList :entries="snapshot.classes" /></div>
     </section>
     <div class="divider">
       <div class="handle" @pointerdown.prevent="startDrag('left', $event)"></div>
@@ -689,7 +689,7 @@ onUnmounted(() => {
       <div class="handle" @pointerdown.prevent="startDrag('right', $event)"></div>
     </div>
     <section class="pane side" :style="{ width: `${rightFraction * 100}%` }">
-      <div class="area"><CodeList :entries="snapshot.methods" /></div>
+      <div class="area"><div v-if="!snapshot.methods.length" class="area-hint">Functions</div><CodeList :entries="snapshot.methods" /></div>
       <div class="area"></div>
     </section>
   </div>
@@ -750,6 +750,11 @@ body.dragging {
 
 .area + .area {
   border-top: 1px solid #888;
+}
+
+.area-hint {
+  color: #777;
+  user-select: none;
 }
 
 .dir-header {
@@ -968,6 +973,10 @@ body.dragging {
 
   .area + .area {
     border-top-color: #777;
+  }
+
+  .area-hint {
+    color: #999;
   }
 
   .dir-dropdown {
