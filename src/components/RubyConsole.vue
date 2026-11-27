@@ -170,6 +170,7 @@ defineExpose({
   focus,
   restore: (e: PaneEntry) => model.restore(e),
   remove: (area: keyof Panes, e: PaneEntry) => model.remove(area, e),
+  submit: (code: string) => model.submit(code),
 });
 </script>
 

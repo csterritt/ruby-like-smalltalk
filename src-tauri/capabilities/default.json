@@ -3,10 +3,14 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": [
-    "main"
+    "main",
+    "editor-*"
   ],
   "permissions": [
     "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
     "dialog:allow-open",
     "clipboard-manager:allow-write-text"
   ]

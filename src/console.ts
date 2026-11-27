@@ -19,6 +19,8 @@ export type RubyEvent =
   | { type: "exited"; generation: number; exitCode?: number; signal?: number; reason: string }
   | { type: "unavailable"; message: string };
 
+export type SubmitResult = { ok: true } | { ok: false; error: string };
+
 export interface Backend {
   check(code: string): Promise<boolean>;
   eval(code: string): Promise<number>;
@@ -306,7 +308,7 @@ export class ConsoleModel {
     return true;
   }
 
-  private async runCode(code: string): Promise<void> {
+  private async runCode(code: string): Promise<string | null> {
     this.endRecall();
     code.split("\n").forEach((text, i) => {
       this.state.items.push({
@@ -320,9 +322,63 @@ export class ConsoleModel {
     const evSeq = ++this.evalSeq;
     try {
       await this.backend.eval(code + "\n");
+      return null;
     } catch (e) {
       this.pushItem({ kind: "notice", tone: "warn", text: String(e) });
       if (this.evalSeq === evSeq) this.setMode("idle");
+      return String(e);
+    }
+  }
+
+  private pendingSubmit: ((r: SubmitResult) => void) | null = null;
+
+  async submit(code: string): Promise<SubmitResult> {
+    const st = this.state;
+    if (st.mode !== "idle") {
+      return { ok: false, error: "Ruby is busy; try again when it's idle." };
+    }
+    if (st.pending.length > 0) {
+      return { ok: false, error: "Finish or cancel the current console entry first." };
+    }
+    const done = new Promise<SubmitResult>((resolve) => {
+      this.pendingSubmit = resolve;
+    });
+    const err = await this.runCode(code);
+    if (err !== null) {
+      this.pendingSubmit = null;
+      return { ok: false, error: err };
+    }
+    return done;
+  }
+
+  private resolveSubmit(ev: Extract<RubyEvent, { type: "result" }>) {
+    const r = this.pendingSubmit;
+    if (!r) return;
+    this.pendingSubmit = null;
+    switch (ev.status) {
+      case "ok":
+        r({ ok: true });
+        break;
+      case "error": {
+        let error: string;
+        if (ev.syntax) {
+          error = ev.message ?? "";
+        } else {
+          error = `${ev.class ?? "Error"}: ${ev.message ?? ""}`;
+          for (const f of (ev.backtrace ?? []).slice(0, 3)) {
+            error += `\n  from ${f}`;
+          }
+        }
+        r({ ok: false, error });
+        break;
+      }
+      case "interrupted":
+        r({ ok: false, error: "Interrupted" });
+        break;
+      case "killed":
+      case "exited":
+        r({ ok: false, error: "Ruby stopped; a fresh session is starting." });
+        break;
     }
   }
 
@@ -509,6 +565,7 @@ export class ConsoleModel {
             break;
           }
         }
+        this.resolveSubmit(ev);
         break;
       }
       case "unavailable":

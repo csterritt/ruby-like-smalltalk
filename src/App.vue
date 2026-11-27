@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { layoutColumns } from "./columns";
 import {
@@ -22,6 +23,17 @@ import RubyConsole from "./components/RubyConsole.vue";
 import VarList from "./components/VarList.vue";
 import CodeList from "./components/CodeList.vue";
 import { emptyPanes, type PaneEntry, type Panes } from "./snapshot";
+import { FONT_FAMILY, FONT_SIZE } from "./fonts";
+import {
+  EDITOR_INIT,
+  EDITOR_READY,
+  EDITOR_RESULT,
+  EDITOR_SAVE,
+  editorText,
+  type EditorReady,
+  type EditorSave,
+} from "./editor";
+import type { SubmitResult } from "./console";
 
 const panes = ref<Panes>(emptyPanes());
 const ctxMenu = ref<{
@@ -58,9 +70,43 @@ function removeCtxEntry() {
   consoleRef.value?.focus();
 }
 
+const editors = new Map<string, WebviewWindow>();
+const editorDefs = new Map<
+  string,
+  { area: keyof Panes; name: string; code: string }
+>();
+let editorSeq = 0;
+
+function editCtxEntry() {
+  const m = ctxMenu.value;
+  if (!m) return;
+  ctxMenu.value = null;
+  const key = `${m.area}:${m.entry.name}`;
+  const existing = editors.get(key);
+  if (existing) {
+    void existing.setFocus();
+    return;
+  }
+  const label = `editor-${++editorSeq}`;
+  editorDefs.set(label, {
+    area: m.area,
+    name: m.entry.name,
+    code: editorText(m.area, m.entry),
+  });
+  const w = new WebviewWindow(label, {
+    url: "index.html?editor=" + encodeURIComponent(label),
+    title: `Edit ${m.entry.name}`,
+    width: 640,
+    height: 420,
+  });
+  editors.set(key, w);
+  void w.once("tauri://destroyed", () => {
+    editors.delete(key);
+    editorDefs.delete(label);
+  });
+}
+
 const LINE_WIDTH = 1;
-const FONT_FAMILY = '"Maple Mono NF"';
-const FONT_SIZE = "14pt";
 
 const container = ref<HTMLElement | null>(null);
 const leftFraction = ref(0.2);
@@ -374,6 +420,7 @@ const consoleRef = ref<{
   focus(): void;
   restore(e: PaneEntry): Promise<void>;
   remove(area: keyof Panes, e: PaneEntry): Promise<void>;
+  submit(code: string): Promise<SubmitResult>;
 } | null>(null);
 
 function restoreEntry(e: PaneEntry) {
@@ -603,6 +650,7 @@ const gridStyle = computed(() => ({
 
 let resizeObserver: ResizeObserver | null = null;
 let unlistenMenuOpen: (() => void) | null = null;
+const unlistenEditor: (() => void)[] = [];
 
 onMounted(async () => {
   const root = document.documentElement;
@@ -620,6 +668,26 @@ onMounted(async () => {
 
   unlistenMenuOpen = await listen("menu-open", () => chooseDirectory());
 
+  unlistenEditor.push(
+    await listen<EditorReady>(EDITOR_READY, async (e) => {
+      const def = editorDefs.get(e.payload.label);
+      if (!def) return;
+      await emitTo(e.payload.label, EDITOR_INIT, {
+        name: def.name,
+        area: def.area,
+        code: def.code,
+      });
+    }),
+  );
+  unlistenEditor.push(
+    await listen<EditorSave>(EDITOR_SAVE, async (e) => {
+      const r =
+        (await consoleRef.value?.submit(e.payload.code)) ??
+        ({ ok: false, error: "console unavailable" } satisfies SubmitResult);
+      await emitTo(e.payload.label, EDITOR_RESULT, r);
+    }),
+  );
+
   if (middlePane.value) {
     resizeObserver = new ResizeObserver(() => {
       if (dirOpen.value) recomputeLayout();
@@ -634,6 +702,7 @@ onUnmounted(() => {
   document.removeEventListener("keydown", onKeyDown);
   resizeObserver?.disconnect();
   unlistenMenuOpen?.();
+  unlistenEditor.forEach((u) => u());
 });
 </script>
 
@@ -745,6 +814,7 @@ onUnmounted(() => {
       class="ctx-menu"
       :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
     >
+      <div class="menu-item" role="menuitem" @click="editCtxEntry">Edit</div>
       <div class="menu-item" role="menuitem" @click="removeCtxEntry">Remove</div>
     </div>
   </div>

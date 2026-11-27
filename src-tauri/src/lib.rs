@@ -367,6 +367,11 @@ pub fn run() {
             ruby_interrupt,
             ruby_status
         ])
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.app_handle().exit(0);
+            }
+        })
         .on_menu_event(|app, event| {
             if event.id() == "open" {
                 let _ = app.emit("menu-open", ());
