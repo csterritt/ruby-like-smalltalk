@@ -1,0 +1,26 @@
+"def f\n"              terminated=false opens=1
+"def f\n  1\nend\n"    terminated=true  opens=0
+"1 +* 2\n"             terminated=true  opens=0
+"end\n"                terminated=true  opens=0
+"[1,\n"                terminated=false opens=1
+"foo(\n"               terminated=false opens=1
+"x = \"abc\n"          terminated=false opens=1
+"1 +\n"                terminated=false opens=0
+"if x\n"               terminated=false opens=1
+"class A; def b\n"     terminated=false opens=2
+"<<~E\nhi\n"           terminated=false opens=1
+"1)\n"                 terminated=true  opens=0
+"def f\n  1 +* 2\n"    terminated=false opens=1
+"{a: \n"               terminated=false opens=1
+"puts 'hi' if\n"       terminated=false opens=0
+"x = 1 \\\n"           terminated=false opens=0
+"=begin\n"             terminated=false opens=1
+"foo do |x|\n"         terminated=false opens=1
+"%w[a b\n"             terminated=false opens=1
+"1 + 2\nend\n"         terminated=true  opens=0
+"x.\n"                 terminated=false opens=0
+"foo\n  .bar\n"        terminated=true  opens=0
+"1 +\n2\n"             terminated=true  opens=0
+"def f(\n"             terminated=false opens=2
+"[1,2]]\n"             terminated=true  opens=0
+"p 1\n"                terminated=true  opens=0

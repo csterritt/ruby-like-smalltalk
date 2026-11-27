@@ -1,5 +1,9 @@
 use std::io::{BufRead, BufReader, ErrorKind, Seek, SeekFrom};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+pub mod ruby;
+
+use ruby::{RubyEvent, Session, SessionConfig};
 
 use tauri::{
     Emitter, Manager, PhysicalSize,
@@ -239,6 +243,60 @@ fn close_text_file(file_id: u64, state: tauri::State<'_, Mutex<PagerState>>) -> 
     Ok(())
 }
 
+struct RubyHost {
+    session: Mutex<Result<Session, String>>,
+    version: Arc<Mutex<Option<String>>>,
+}
+
+#[tauri::command(async)]
+fn ruby_check(code: String, host: tauri::State<'_, RubyHost>) -> Result<bool, String> {
+    let session = host.session.lock().map_err(|_| "ruby state unavailable")?;
+    session.as_ref().map_err(Clone::clone)?.check(&code)
+}
+
+#[tauri::command(async)]
+fn ruby_eval(code: String, host: tauri::State<'_, RubyHost>) -> Result<u64, String> {
+    let session = host.session.lock().map_err(|_| "ruby state unavailable")?;
+    session.as_ref().map_err(Clone::clone)?.eval(&code)
+}
+
+#[tauri::command(async)]
+fn ruby_stdin(text: String, host: tauri::State<'_, RubyHost>) -> Result<(), String> {
+    let session = host.session.lock().map_err(|_| "ruby state unavailable")?;
+    session.as_ref().map_err(Clone::clone)?.stdin(&text)
+}
+
+#[tauri::command(async)]
+fn ruby_interrupt(host: tauri::State<'_, RubyHost>) -> Result<String, String> {
+    let session = host.session.lock().map_err(|_| "ruby state unavailable")?;
+    Ok(session.as_ref().map_err(Clone::clone)?.interrupt().to_string())
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RubyStatus {
+    ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn ruby_status(host: tauri::State<'_, RubyHost>) -> RubyStatus {
+    let session = host.session.lock().ok();
+    let (ready, error) = match session.as_deref() {
+        Some(Ok(_)) => (true, None),
+        Some(Err(e)) => (false, Some(e.clone())),
+        None => (false, Some("ruby state unavailable".to_string())),
+    };
+    RubyStatus {
+        ready,
+        version: host.version.lock().ok().and_then(|v| v.clone()),
+        error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,7 +360,12 @@ pub fn run() {
             list_dir,
             open_text_file,
             read_text_lines,
-            close_text_file
+            close_text_file,
+            ruby_check,
+            ruby_eval,
+            ruby_stdin,
+            ruby_interrupt,
+            ruby_status
         ])
         .on_menu_event(|app, event| {
             if event.id() == "open" {
@@ -341,6 +404,31 @@ pub fn run() {
                 window.center()?;
             }
             window.show()?;
+
+            let version = Arc::new(Mutex::new(None));
+            let version_sink = Arc::clone(&version);
+            let handle = app.handle().clone();
+            let sink = Arc::new(move |ev: RubyEvent| {
+                if let RubyEvent::Started { version: v, .. } = &ev {
+                    if let Ok(mut slot) = version_sink.lock() {
+                        *slot = Some(v.clone());
+                    }
+                }
+                let _ = handle.emit("ruby-event", &ev);
+            });
+            let session = Session::spawn(SessionConfig::default(), sink);
+            if let Err(e) = &session {
+                let _ = app.emit(
+                    "ruby-event",
+                    RubyEvent::Unavailable {
+                        message: e.clone(),
+                    },
+                );
+            }
+            app.manage(RubyHost {
+                session: Mutex::new(session),
+                version,
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

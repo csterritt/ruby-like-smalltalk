@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ruby console: progress</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --ink: #1b1b1b; --dim: #6b6b6b; --line: #d9d9d4; --card: #fff;
+    --pass: #1f8a4c; --pass-bg: #e3f4ea; --fail: #c0392b; --fail-bg: #fbe5e2;
+    --pend: #9a9a9a; --pend-bg: #efefec; --warn: #b7791f; --warn-bg: #fdf1dc;
+    --mono: ui-monospace, "Maple Mono NF", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 -apple-system, system-ui, sans-serif; }
+  header { padding: 20px 28px 12px; border-bottom: 1px solid var(--line); background: var(--card); position: sticky; top: 0; z-index: 5; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  .goal { color: var(--dim); max-width: 1000px; }
+  .meta { margin-top: 8px; display: flex; gap: 18px; flex-wrap: wrap; color: var(--dim); font-size: 12px; }
+  .meta b { color: var(--ink); }
+  main { padding: 18px 28px 60px; display: grid; gap: 22px; }
+  section > h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+
+  .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+  .tile { border-radius: 8px; padding: 10px 12px; border: 1px solid var(--line); background: var(--pend-bg); position: relative; overflow: hidden; }
+  .tile .id { font: 700 12px var(--mono); }
+  .tile .t { font-weight: 600; margin: 2px 0 4px; }
+  .tile .m { color: var(--dim); font-size: 12px; }
+  .tile .count { position: absolute; top: 9px; right: 12px; font: 600 12px var(--mono); }
+  .tile.pass { background: var(--pass-bg); border-color: #b5dfc4; } .tile.pass .id, .tile.pass .count { color: var(--pass); }
+  .tile.fail { background: var(--fail-bg); border-color: #efb8b1; } .tile.fail .id, .tile.fail .count { color: var(--fail); }
+  .tile.manual { background: repeating-linear-gradient(135deg, var(--warn-bg) 0 10px, #fff8ec 10px 20px); border-color: #ecd3a5; }
+  .tile.manual .id { color: var(--warn); }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; display: flex; }
+  .bar i { display: block; height: 100%; }
+
+  .checks { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { border-radius: 999px; padding: 4px 12px; font: 12px var(--mono); border: 1px solid var(--line); background: var(--pend-bg); cursor: pointer; }
+  .chip.pass { background: var(--pass-bg); color: var(--pass); border-color: #b5dfc4; }
+  .chip.fail { background: var(--fail-bg); color: var(--fail); border-color: #efb8b1; }
+  pre.tail { margin: 10px 0 0; max-height: 280px; overflow: auto; background: #1d1f21; color: #ddd; padding: 10px; border-radius: 6px; font: 12px/1.4 var(--mono); white-space: pre-wrap; }
+
+  .lat { display: grid; grid-template-columns: 170px 1fr 90px; gap: 6px 12px; align-items: center; }
+  .lat .name { font: 12px var(--mono); }
+  .lat .track { position: relative; height: 16px; background: var(--pend-bg); border-radius: 3px; }
+  .lat .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+  .lat .limit { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
+  .lat .val { font: 12px var(--mono); text-align: right; }
+  .legend { color: var(--dim); font-size: 12px; margin-top: 8px; }
+
+  .kgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
+  .k { border: 1px solid var(--line); border-left: 4px solid var(--pend); border-radius: 5px; padding: 5px 8px; background: var(--card); }
+  .k.pass { border-left-color: var(--pass); } .k.fail { border-left-color: var(--fail); background: var(--fail-bg); }
+  .k code { font: 12px var(--mono); white-space: pre; display: block; overflow: hidden; text-overflow: ellipsis; }
+  .k .v { font-size: 11px; color: var(--dim); }
+  .k .v b.more { color: var(--warn); } .k .v b.done { color: var(--pass); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+  tr.row { cursor: pointer; } tr.row:hover td { background: #fafaf7; }
+  .badge { display: inline-block; min-width: 44px; text-align: center; border-radius: 4px; padding: 1px 6px; font: 600 11px var(--mono); }
+  .badge.pass { background: var(--pass-bg); color: var(--pass); } .badge.fail { background: var(--fail-bg); color: var(--fail); }
+  .badge.pend { background: var(--pend-bg); color: var(--pend); }
+  td.mono, .mono { font-family: var(--mono); font-size: 12px; }
+  .failure { color: var(--fail); font: 12px var(--mono); white-space: pre-wrap; }
+  .tl { margin: 6px 0 4px 6px; border-left: 2px solid var(--line); padding-left: 12px; }
+  .ev { font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; }
+  .ev .ts { color: var(--dim); display: inline-block; width: 64px; }
+  .ev.in .dir { color: #2b6cb0; } .ev.out .dir { color: #6b46c1; }
+  .ev .dir { display: inline-block; width: 22px; font-weight: 700; }
+
+  .attempts { display: grid; gap: 10px; }
+  .att { display: grid; grid-template-columns: 54px 1fr; gap: 12px; }
+  .att .n { font: 700 18px var(--mono); color: var(--dim); text-align: right; padding-top: 10px; }
+  .att .card { border-left: 4px solid var(--pend); }
+  .att.pass .card { border-left-color: var(--pass); } .att.fail .card { border-left-color: var(--fail); }
+  .att.partial .card { border-left-color: var(--warn); }
+  .att h3 { margin: 0 0 6px; font-size: 15px; }
+  .kv { display: grid; grid-template-columns: 70px 1fr; gap: 3px 10px; font-size: 13px; }
+  .kv dt { color: var(--dim); font-size: 11px; text-transform: uppercase; padding-top: 2px; }
+  .kv dd { margin: 0; }
+  .flag { margin-top: 8px; background: var(--warn-bg); border: 1px solid #ecd3a5; border-radius: 5px; padding: 6px 9px; font-size: 13px; }
+  .flag b { color: var(--warn); font: 700 11px var(--mono); margin-right: 6px; }
+  .decisions { display: grid; gap: 6px; }
+  .dec { display: grid; grid-template-columns: 150px 1fr 60px; gap: 10px; font-size: 13px; }
+  .dec .by { font: 11px var(--mono); color: var(--dim); text-align: right; }
+  .dec .ev2 { color: var(--dim); font-size: 12px; }
+  .empty { color: var(--dim); font-style: italic; }
+  .live { width: 8px; height: 8px; border-radius: 50%; background: var(--pass); display: inline-block; margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ruby console in the middle pane</h1>
+  <div class="goal" id="goal"></div>
+  <div class="meta" id="meta"></div>
+</header>
+<main>
+  <section><h2>Success criteria</h2><div class="board" id="board"></div></section>
+  <section><h2>Gates (run-checks.sh)</h2><div class="card"><div class="checks" id="checks"></div><div id="checkTail"></div></div></section>
+  <section><h2>Ctrl-C responsiveness</h2><div class="card"><div class="lat" id="lat"></div>
+    <div class="legend">Bar = measured time from Ctrl-C to result (or to fresh session). Black tick = limit. Green under limit, red over.</div></div></section>
+  <section><h2>Is the entry finished? (K01-K26, asked of the live ruby process)</h2><div class="kgrid" id="kgrid"></div></section>
+  <section><h2>Scenarios: click a row for its transcript</h2><div class="card"><table id="scen"></table></div></section>
+  <section><h2>Attempt log</h2><div class="attempts" id="attempts"></div></section>
+  <section><h2>Design decisions</h2><div class="card decisions" id="decisions"></div></section>
+</main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const open = new Set();
+let checkOpen = null;
+
+async function getJSON(path) {
+  try { const r = await fetch(path + "?t=" + Date.now()); return r.ok ? await r.json() : null; } catch { return null; }
+}
+
+function verdictOf(items) {
+  if (!items.length) return "pend";
+  return items.every((s) => s.pass) ? "pass" : "fail";
+}
+
+function render(log, res) {
+  const scen = res?.scenarios ?? [];
+  const checks = res?.checks ?? [];
+  document.getElementById("goal").textContent = log?.goal ?? "";
+  const passN = scen.filter((s) => s.pass).length;
+  document.getElementById("meta").innerHTML =
+    `<span><span class="live"></span>auto-refresh 5 s</span>` +
+    `<span>results: <b>${res ? esc(res.generatedAt) : "not generated yet"}</b></span>` +
+    `<span>ruby: <b>${esc(res?.ruby ?? "?")}</b></span>` +
+    `<span>scenarios: <b>${passN}/${scen.length}</b> pass</span>` +
+    `<span>gates: <b>${checks.filter((c) => c.exitCode === 0).length}/${checks.length}</b> green</span>`;
+
+  const board = document.getElementById("board");
+  board.innerHTML = (log?.criteria ?? []).map((c) => {
+    let items = scen.filter((s) => s.criterion === c.id);
+    let cls, count;
+    if (c.id === "S12") {
+      items = checks.map((k) => ({ pass: k.exitCode === 0 }));
+    }
+    if (c.id === "S13") { cls = "manual"; count = "manual"; }
+    else { cls = verdictOf(items); count = items.length ? `${items.filter((i) => i.pass).length}/${items.length}` : "-"; }
+    const p = items.filter((i) => i.pass).length, f = items.length - p;
+    const bar = items.length ? `<div class="bar"><i style="width:${p / items.length * 100}%;background:var(--pass)"></i><i style="width:${f / items.length * 100}%;background:var(--fail)"></i></div>` : `<div class="bar"></div>`;
+    return `<div class="tile ${cls}"><div class="id">${c.id}</div><div class="count">${count}</div><div class="t">${esc(c.title)}</div><div class="m">${esc(c.measure)}</div>${bar}</div>`;
+  }).join("");
+
+  const ch = document.getElementById("checks");
+  ch.innerHTML = checks.length ? checks.map((k, i) =>
+    `<span class="chip ${k.exitCode === 0 ? "pass" : "fail"}" data-i="${i}">${esc(k.name)} · ${k.exitCode === 0 ? "ok" : "exit " + k.exitCode} · ${(k.durationMs / 1000).toFixed(1)}s</span>`).join("")
+    : `<span class="empty">no run yet</span>`;
+  ch.querySelectorAll(".chip[data-i]").forEach((el) => el.onclick = () => { const i = +el.dataset.i; checkOpen = checkOpen === i ? null : i; render(log, res); });
+  const k = checkOpen != null ? checks[checkOpen] : null;
+  document.getElementById("checkTail").innerHTML = k ? `<pre class="tail">$ ${esc(k.command)}\n${esc(k.tail)}</pre>` : "";
+
+  const lat = scen.filter((s) => s.metric);
+  const maxV = Math.max(1, ...lat.map((s) => Math.max(s.metric.value, s.metric.limit)));
+  document.getElementById("lat").innerHTML = lat.length ? lat.map((s) => {
+    const m = s.metric, ok = m.value <= m.limit;
+    return `<div class="name">${esc(s.id)} ${esc(m.name)}</div><div class="track"><div class="fill" style="width:${m.value / maxV * 100}%;background:${ok ? "var(--pass)" : "var(--fail)"}"></div><div class="limit" style="left:${m.limit / maxV * 100}%"></div></div><div class="val">${Math.round(m.value)} / ${m.limit} ${esc(m.unit)}</div>`;
+  }).join("") : `<div class="empty">no measurements yet</div>`;
+
+  const ks = scen.filter((s) => s.id.startsWith("K"));
+  document.getElementById("kgrid").innerHTML = ks.length ? ks.map((s) => {
+    const code = s.transcript?.[0]?.detail ?? s.title;
+    const got = (s.transcript ?? []).find((e) => e.dir === "out")?.detail ?? "?";
+    return `<div class="k ${s.pass ? "pass" : "fail"}" title="${esc(s.expect)}"><code>${esc(code)}</code><div class="v">${esc(s.id)} · expect ${esc(s.expect)} · got <b class="${/true/.test(got) ? "done" : "more"}">${esc(got)}</b></div></div>`;
+  }).join("") : `<div class="empty">no completeness results yet</div>`;
+
+  const rows = scen.filter((s) => !s.id.startsWith("K"));
+  const tbl = document.getElementById("scen");
+  tbl.innerHTML = `<tr><th></th><th>id</th><th>crit</th><th>scenario</th><th>expect</th><th>time</th></tr>` + (rows.length ? rows.map((s) => {
+    const main = `<tr class="row" data-id="${esc(s.id)}"><td><span class="badge ${s.pass ? "pass" : "fail"}">${s.pass ? "PASS" : "FAIL"}</span></td><td class="mono">${esc(s.id)}</td><td class="mono">${esc(s.criterion)}</td><td>${esc(s.title)}${s.failure ? `<div class="failure">${esc(s.failure)}</div>` : ""}</td><td>${esc(s.expect)}</td><td class="mono">${s.durationMs ?? "-"} ms</td></tr>`;
+    if (!open.has(s.id)) return main;
+    const tl = (s.transcript ?? []).map((e) => `<div class="ev ${e.dir}"><span class="ts">+${e.tMs}ms</span><span class="dir">${e.dir === "in" ? "→" : "←"}</span><b>${esc(e.kind)}</b> ${esc(e.detail)}</div>`).join("");
+    return main + `<tr><td></td><td colspan="5"><div class="tl">${tl || '<span class="empty">no transcript</span>'}</div></td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">no scenario results yet</td></tr>`);
+  tbl.querySelectorAll("tr.row").forEach((tr) => tr.onclick = () => { const id = tr.dataset.id; open.has(id) ? open.delete(id) : open.add(id); render(log, res); });
+
+  document.getElementById("attempts").innerHTML = (log?.attempts ?? []).slice().reverse().map((a) =>
+    `<div class="att ${esc(a.verdict)}"><div class="n">#${a.n}</div><div class="card"><h3>${esc(a.title)} <span class="badge ${a.verdict === "pass" ? "pass" : a.verdict === "fail" ? "fail" : "pend"}">${esc(a.verdict.toUpperCase())}</span></h3>
+      <dl class="kv"><dt>Changed</dt><dd>${esc(a.changed)}</dd><dt>Result</dt><dd>${esc(a.result)}</dd><dt>Next</dt><dd>${esc(a.next)}</dd></dl>
+      ${a.flag ? `<div class="flag"><b>FLAG</b>${esc(a.flag)}</div>` : ""}</div></div>`).join("");
+
+  document.getElementById("decisions").innerHTML = (log?.decisions ?? []).map((d) =>
+    `<div class="dec"><b>${esc(d.topic)}</b><div>${esc(d.choice)}${d.evidence ? `<div class="ev2">evidence: ${esc(d.evidence)}</div>` : ""}</div><div class="by">${esc(d.by)}</div></div>`).join("");
+}
+
+let last = { log: null, res: null };
+async function tick() {
+  const [log, res] = await Promise.all([getJSON("log.json"), getJSON("results.json")]);
+  last = { log, res };
+  render(log, res);
+}
+tick();
+setInterval(tick, 5000);
+</script>
+</body>
+</html>

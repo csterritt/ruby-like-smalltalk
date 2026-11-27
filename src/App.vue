@@ -18,6 +18,7 @@ import {
 } from "./pager";
 import FileName from "./components/FileName.vue";
 import GearIcon from "./components/GearIcon.vue";
+import RubyConsole from "./components/RubyConsole.vue";
 
 const LINE_WIDTH = 1;
 const FONT_FAMILY = '"Maple Mono NF"';
@@ -330,6 +331,7 @@ const gapEl = ref<HTMLElement | null>(null);
 const gearButton = ref<HTMLElement | null>(null);
 const menuEl = ref<HTMLElement | null>(null);
 const menuOpen = ref(false);
+const consoleRef = ref<{ ctrlC(): Promise<void>; focus(): void } | null>(null);
 
 let cachedWidths: number[] = [];
 
@@ -486,6 +488,13 @@ function onKeyDown(e: KeyboardEvent) {
     const down = e.key === "ArrowDown";
     navigate((g, p) => (down ? rowDown(g, p) : rowUp(g, p)));
   }
+  if (e.ctrlKey && !e.metaKey && (e.key === "c" || e.key === "C")) {
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest?.(".ruby-console input")) {
+      e.preventDefault();
+      void consoleRef.value?.ctrlC();
+    }
+  }
 }
 
 function onFileWheel(e: WheelEvent) {
@@ -597,6 +606,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div ref="dirBody" class="dir-body">
+        <RubyConsole ref="consoleRef" :suspended="dirOpen || !!fileView" />
         <div v-if="dirOpen" ref="dropdown" class="dir-dropdown">
           <span ref="gapEl" class="gap-measure" aria-hidden="true">{{ "  " }}</span>
           <div v-if="dirError" class="dir-message">{{ dirError }}</div>

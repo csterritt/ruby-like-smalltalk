@@ -22,3 +22,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+Notes/ruby-repl/results.json
+Notes/ruby-repl/report/
