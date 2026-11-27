@@ -4,7 +4,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { layoutColumns } from "./columns";
-import { clampStart, isPaged, lineDownStart, lineUpStart, nextStart, pageRows, prevStart } from "./pager";
+import {
+  clampPos,
+  isPaged,
+  layout,
+  nextPage,
+  prevPage,
+  rowDown,
+  rowUp,
+  runLines,
+  type Geom,
+  type Pos,
+} from "./pager";
 import FileName from "./components/FileName.vue";
 import GearIcon from "./components/GearIcon.vue";
 
@@ -69,71 +80,195 @@ interface DirEntry {
   isDir: boolean;
 }
 
-type FileDisplayRow =
-  | { kind: "line"; index: number; text: string }
+type FileDisplaySeg =
+  | { kind: "rows"; row: number; rows: number; lines: { index: number; text: string }[] }
   | { kind: "bar"; id: "top" | "bottom" };
 
 const fileView = ref<{ path: string; fileId: number; lineCount: number } | null>(null);
 const fileOverlay = ref<HTMLElement | null>(null);
-const fileStart = ref(0);
+const filePos = ref<Pos>({ line: 0, row: 0 });
 const paneRows = ref(0);
-const fileRows = ref<FileDisplayRow[]>([]);
+const fileRowH = ref(0);
+const filePaged = ref(false);
+const fileSegs = ref<FileDisplaySeg[]>([]);
+const lineWrap = ref(false);
+const lineTexts = new Map<number, string>();
+const lineHeights = new Map<number, number>();
 const BAR_TEXT = "● ".repeat(1000);
 let fileRowsRequest = 0;
 let wheelLines = 0;
+let wheelSteps = 0;
+let fileOpChain: Promise<void> = Promise.resolve();
 
-function scrollFileTo(start: number) {
-  if (start === fileStart.value) return;
-  fileStart.value = start;
-  void refreshFileRows();
+function queueFileOp(op: () => Promise<void>) {
+  fileOpChain = fileOpChain.then(op).catch((error) => {
+    console.error("file op failed:", error);
+  });
+}
+
+function fileGeom(view: { lineCount: number }): Geom {
+  return {
+    L: view.lineCount,
+    N: paneRows.value,
+    height: (line: number) => {
+      if (!lineWrap.value) return 1;
+      const h = lineHeights.get(line);
+      if (h === undefined) throw new Error(`missing height for line ${line}`);
+      return h;
+    },
+  };
+}
+
+// Line indices the pager may touch: bounded walks from the start, the
+// end, and the current position.
+function fileWindow(view: { lineCount: number }): number[] {
+  const L = view.lineCount;
+  const N = paneRows.value;
+  const p = filePos.value.line;
+  const indices: number[] = [];
+  const push = (a: number, b: number) => {
+    for (let i = Math.max(0, a); i < Math.min(L, b); i++) indices.push(i);
+  };
+  push(0, N + 2);
+  push(L - N - 2, L);
+  push(p - N - 2, p + 2 * N + 2);
+  return indices;
+}
+
+function measureLineHeights(indices: number[]) {
+  const overlay = fileOverlay.value;
+  const measure = rowMeasure.value;
+  if (!overlay || !measure || indices.length === 0) return;
+  const cs = getComputedStyle(overlay);
+  const width =
+    overlay.clientWidth -
+    parseFloat(cs.paddingLeft) -
+    parseFloat(cs.paddingRight);
+  const rowH = measure.getBoundingClientRect().height;
+  if (width <= 0 || rowH <= 0) return;
+
+  const host = document.createElement("div");
+  host.style.position = "absolute";
+  host.style.visibility = "hidden";
+  host.style.pointerEvents = "none";
+  host.style.top = "0";
+  host.style.left = "0";
+  host.style.width = `${width}px`;
+  try {
+    for (const i of indices) {
+      const child = document.createElement("div");
+      child.className = "file-row";
+      child.style.whiteSpace = "pre-wrap";
+      child.style.overflowWrap = "anywhere";
+      child.textContent = lineTexts.get(i) || " ";
+      host.appendChild(child);
+    }
+    overlay.appendChild(host);
+    let k = 0;
+    for (const child of Array.from(host.children) as HTMLElement[]) {
+      const h = Math.max(1, Math.round(child.getBoundingClientRect().height / rowH));
+      lineHeights.set(indices[k++], h);
+    }
+  } finally {
+    host.remove();
+  }
+}
+
+async function ensureLines(view: { fileId: number; lineCount: number }, indices: number[]) {
+  const want = [...new Set(indices)].filter((i) => i >= 0 && i < view.lineCount);
+  const needText = want.filter((i) => !lineTexts.has(i)).sort((a, b) => a - b);
+  if (needText.length > 0) {
+    const lines = await invoke<string[]>("read_text_lines", {
+      fileId: view.fileId,
+      indices: needText,
+    });
+    if (fileView.value?.fileId !== view.fileId) return;
+    needText.forEach((i, k) => lineTexts.set(i, lines[k] ?? ""));
+  }
+  if (lineWrap.value) {
+    measureLineHeights(want.filter((i) => !lineHeights.has(i)));
+  }
+}
+
+async function renderFile() {
+  const view = fileView.value;
+  const request = ++fileRowsRequest;
+  if (!view || view.lineCount <= 0 || paneRows.value <= 0) {
+    fileSegs.value = [];
+    filePaged.value = false;
+    return;
+  }
+  try {
+    await ensureLines(view, fileWindow(view));
+    if (request !== fileRowsRequest || fileView.value?.fileId !== view.fileId) return;
+    const g = fileGeom(view);
+    filePos.value = clampPos(g, filePos.value);
+    const paged = isPaged(g);
+    if (!paged) {
+      await ensureLines(view, Array.from({ length: view.lineCount }, (_, i) => i));
+      if (request !== fileRowsRequest || fileView.value?.fileId !== view.fileId) return;
+    }
+    filePaged.value = paged;
+    fileSegs.value = layout(g, filePos.value).map((seg) =>
+      seg.kind === "bar"
+        ? seg
+        : {
+            kind: "rows",
+            row: seg.row,
+            rows: seg.rows,
+            lines: runLines(g, seg).map((i) => ({
+              index: i,
+              text: lineTexts.get(i) ?? "",
+            })),
+          }
+    );
+  } catch (error) {
+    if (request === fileRowsRequest) {
+      console.error("render file failed:", error);
+    }
+  }
+}
+
+function navigate(step: (g: Geom, p: Pos) => Pos) {
+  queueFileOp(async () => {
+    const view = fileView.value;
+    if (!view || view.lineCount <= 0 || paneRows.value <= 0) return;
+    await ensureLines(view, fileWindow(view));
+    if (fileView.value?.fileId !== view.fileId) return;
+    const g = fileGeom(view);
+    const next = step(g, clampPos(g, filePos.value));
+    if (next.line !== filePos.value.line || next.row !== filePos.value.row) {
+      filePos.value = next;
+    }
+    await renderFile();
+  });
+}
+
+function toggleLineWrap() {
+  queueFileOp(async () => {
+    lineWrap.value = !lineWrap.value;
+    lineHeights.clear();
+    filePos.value = { line: filePos.value.line, row: 0 };
+    await renderFile();
+  });
 }
 
 async function openFile(path: string) {
   const opened = await invoke<{ fileId: number; lineCount: number }>("open_text_file", { path });
   fileRowsRequest++;
-  fileRows.value = [];
+  fileSegs.value = [];
+  filePaged.value = false;
   fileView.value = { path, ...opened };
-  fileStart.value = 0;
+  filePos.value = { line: 0, row: 0 };
   wheelLines = 0;
+  wheelSteps = 0;
+  lineTexts.clear();
+  lineHeights.clear();
   closeDir();
   await nextTick();
   await document.fonts.ready;
   computeFileRows();
 }
-
-async function refreshFileRows() {
-  const view = fileView.value;
-  const request = ++fileRowsRequest;
-  if (!view || paneRows.value <= 0) {
-    fileRows.value = [];
-    return;
-  }
-
-  const rows = pageRows(view.lineCount, paneRows.value, fileStart.value);
-  const indices = rows.flatMap((row) => row.kind === "line" ? [row.index] : []);
-  try {
-    const lines = indices.length === 0
-      ? []
-      : await invoke<string[]>("read_text_lines", { fileId: view.fileId, indices });
-    if (request !== fileRowsRequest || fileView.value?.fileId !== view.fileId) return;
-    let linePos = 0;
-    fileRows.value = rows.map((row) =>
-      row.kind === "line"
-        ? { kind: "line", index: row.index, text: lines[linePos++] }
-        : row
-    );
-  } catch (error) {
-    if (request === fileRowsRequest) {
-      console.error("read file lines failed:", error);
-    }
-  }
-}
-
-const filePaged = computed(() =>
-  fileView.value
-    ? isPaged(fileView.value.lineCount, paneRows.value)
-    : false
-);
 
 function computeFileRows() {
   const body = dirBody.value;
@@ -148,21 +283,22 @@ function computeFileRows() {
     parseFloat(cs.borderTopWidth) -
     parseFloat(cs.borderBottomWidth);
   const rowH = measure.getBoundingClientRect().height;
+  fileRowH.value = rowH;
   paneRows.value = rowH > 0 ? Math.floor(avail / rowH) : 0;
-  fileStart.value = clampStart(
-    fileView.value?.lineCount ?? 0,
-    paneRows.value,
-    fileStart.value
-  );
-  if (fileView.value) void refreshFileRows();
+  lineHeights.clear();
+  if (fileView.value) queueFileOp(() => renderFile());
 }
 
 function closeFile() {
   const view = fileView.value;
   fileRowsRequest++;
-  fileRows.value = [];
+  fileSegs.value = [];
+  filePaged.value = false;
   fileView.value = null;
   wheelLines = 0;
+  wheelSteps = 0;
+  lineTexts.clear();
+  lineHeights.clear();
   if (view) {
     void invoke("close_text_file", { fileId: view.fileId }).catch((error) => {
       console.error("close file failed:", error);
@@ -332,27 +468,18 @@ function onKeyDown(e: KeyboardEvent) {
   }
   if (fileView.value && (e.key === "PageDown" || e.key === "PageUp")) {
     e.preventDefault();
-    const L = fileView.value.lineCount;
-    scrollFileTo(
-      e.key === "PageDown"
-        ? nextStart(L, paneRows.value, fileStart.value)
-        : prevStart(L, paneRows.value, fileStart.value)
-    );
+    const down = e.key === "PageDown";
+    navigate((g, p) => (down ? nextPage(g, p) : prevPage(g, p)));
   }
   if (fileView.value && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
     e.preventDefault();
-    const L = fileView.value.lineCount;
-    scrollFileTo(
-      e.key === "ArrowDown"
-        ? lineDownStart(L, paneRows.value, fileStart.value)
-        : lineUpStart(L, paneRows.value, fileStart.value)
-    );
+    const down = e.key === "ArrowDown";
+    navigate((g, p) => (down ? rowDown(g, p) : rowUp(g, p)));
   }
 }
 
 function onFileWheel(e: WheelEvent) {
-  const view = fileView.value;
-  if (!view || !filePaged.value) return;
+  if (!fileView.value || !filePaged.value) return;
   if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
   e.preventDefault();
 
@@ -366,18 +493,27 @@ function onFileWheel(e: WheelEvent) {
     delta = e.deltaY / (rowHeight && rowHeight > 0 ? rowHeight : 20);
   }
   wheelLines += delta;
-  const steps = Math.trunc(wheelLines);
+  let steps = Math.trunc(wheelLines);
   if (steps === 0) return;
   wheelLines -= steps;
+  steps = Math.max(-paneRows.value, Math.min(paneRows.value, steps));
+  wheelSteps += steps;
 
-  const L = view.lineCount;
-  let start = fileStart.value;
-  for (let i = 0; i < Math.abs(steps); i++) {
-    start = steps > 0
-      ? lineDownStart(L, paneRows.value, start)
-      : lineUpStart(L, paneRows.value, start);
-  }
-  scrollFileTo(start);
+  queueFileOp(async () => {
+    const view = fileView.value;
+    const total = Math.max(-paneRows.value, Math.min(paneRows.value, wheelSteps));
+    wheelSteps = 0;
+    if (!view || total === 0 || paneRows.value <= 0) return;
+    await ensureLines(view, fileWindow(view));
+    if (fileView.value?.fileId !== view.fileId) return;
+    const g = fileGeom(view);
+    let p = clampPos(g, filePos.value);
+    for (let i = 0; i < Math.abs(total); i++) {
+      p = total > 0 ? rowDown(g, p) : rowUp(g, p);
+    }
+    filePos.value = p;
+    await renderFile();
+  });
 }
 
 const gridStyle = computed(() => ({
@@ -445,6 +581,9 @@ onUnmounted(() => {
           <div class="menu-item" role="menuitem" @click="chooseDirectory">
             Open...
           </div>
+          <div class="menu-item" role="menuitem" @click="toggleLineWrap">
+            Line wrap is {{ lineWrap ? "on" : "off" }}
+          </div>
         </div>
       </div>
       <div ref="dirBody" class="dir-body">
@@ -472,17 +611,29 @@ onUnmounted(() => {
           v-if="fileView"
           ref="fileOverlay"
           class="dir-dropdown file-view"
-          :class="{ paged: filePaged }"
+          :class="{ paged: filePaged, wrap: lineWrap }"
           @wheel="onFileWheel"
         >
           <div ref="rowMeasure" class="file-row row-measure" aria-hidden="true">{{ " " }}</div>
           <div v-if="fileView.lineCount === 0" class="dir-message">(empty)</div>
           <div v-else class="file-content">
             <template
-              v-for="row in fileRows"
-              :key="row.kind === 'line' ? `l${row.index}` : `bar-${row.id}`"
+              v-for="(seg, si) in fileSegs"
+              :key="seg.kind === 'bar' ? `bar-${seg.id}` : `seg-${si}`"
             >
-              <div v-if="row.kind === 'line'" class="file-row">{{ row.text || " " }}</div>
+              <div
+                v-if="seg.kind === 'rows'"
+                class="rows-clip"
+                :style="{ height: `${seg.rows * fileRowH}px` }"
+              >
+                <div :style="{ marginTop: `${-seg.row * fileRowH}px` }">
+                  <div
+                    v-for="line in seg.lines"
+                    :key="line.index"
+                    class="file-row"
+                  >{{ line.text || " " }}</div>
+                </div>
+              </div>
               <div v-else class="file-row file-bar" aria-hidden="true">{{ BAR_TEXT }}</div>
             </template>
           </div>
@@ -622,6 +773,28 @@ body.dragging {
 .file-content {
   width: max-content;
   min-width: 100%;
+}
+
+.file-view.wrap {
+  overflow-x: hidden;
+}
+
+.file-view.wrap .file-content {
+  width: 100%;
+  min-width: 0;
+}
+
+.file-view.wrap .file-content .file-row {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.file-view.wrap .file-content .file-row.file-bar {
+  white-space: pre;
+}
+
+.rows-clip {
+  overflow: hidden;
 }
 
 .file-row {
