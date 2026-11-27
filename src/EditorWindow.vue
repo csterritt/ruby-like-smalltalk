@@ -83,7 +83,7 @@ async function onKey(e: KeyboardEvent) {
         Save
       </button>
     </div>
-    <div v-if="error" class="editor-error">{{ error }}</div>
+    <div v-if="error" class="editor-error" @click="error = null">{{ error }}</div>
     <textarea
       ref="textarea"
       v-model="text"
@@ -150,6 +150,7 @@ body {
 }
 .editor-error {
   flex: none;
+  cursor: pointer;
   color: #c0392b;
   white-space: pre-wrap;
   padding: 4px 8px;
