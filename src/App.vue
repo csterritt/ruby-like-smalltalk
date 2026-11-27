@@ -488,6 +488,12 @@ function onKeyDown(e: KeyboardEvent) {
     const down = e.key === "ArrowDown";
     navigate((g, p) => (down ? rowDown(g, p) : rowUp(g, p)));
   }
+  if (fileView.value && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+    e.preventDefault();
+    const overlay = fileOverlay.value;
+    const charW = rowMeasure.value?.getBoundingClientRect().width || 8;
+    if (overlay) overlay.scrollLeft += e.key === "ArrowRight" ? charW : -charW;
+  }
   if (e.ctrlKey && !e.metaKey && (e.key === "c" || e.key === "C")) {
     const target = e.target as HTMLElement | null;
     if (!target?.closest?.(".ruby-console input")) {

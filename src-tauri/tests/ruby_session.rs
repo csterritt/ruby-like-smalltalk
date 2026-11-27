@@ -817,3 +817,23 @@ fn e23_bad_ruby_path() {
     }
     scn.finish();
 }
+
+#[test]
+fn e24_underscore_last_value() {
+    let mut scn = Scn::new("E24", "S14", "_ holds the most recent value", "a = _ after 234 ** 2 gives 54756; errors leave _ alone");
+    let v = scn.eval_value("234 ** 2");
+    scn.expect_eq(v, Some("54756".to_string()), "234 ** 2");
+    let v = scn.eval_value("a = _");
+    scn.expect_eq(v, Some("54756".to_string()), "a = _");
+    let v = scn.eval_value("a");
+    scn.expect_eq(v, Some("54756".to_string()), "a");
+    let v = scn.eval_value("\"x\"");
+    scn.expect_eq(v, Some("\"x\"".to_string()), "\"x\"");
+    let id = scn.eval_id("nil.foo");
+    scn.drain(|ev| result_for(ev, id), Duration::from_millis(2000));
+    let status = scn.first_result(id).and_then(|e| status_of(&e));
+    scn.expect_eq(status, Some("error".to_string()), "nil.foo is an error");
+    let v = scn.eval_value("_");
+    scn.expect_eq(v, Some("\"x\"".to_string()), "_ unchanged by the error");
+    scn.finish();
+}

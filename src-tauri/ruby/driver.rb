@@ -58,7 +58,9 @@ class RLS__Driver
     @busy = true
     status =
       begin
-        reply_ok(eval(code, TOPLEVEL_BINDING, "(rls)", 1))
+        result = eval(code, TOPLEVEL_BINDING, "(rls)", 1)
+        TOPLEVEL_BINDING.local_variable_set(:_, result)
+        reply_ok(result)
       rescue Interrupt => e
         { status: "interrupted", backtrace: rls_frames(e) }
       rescue SystemExit, SignalException

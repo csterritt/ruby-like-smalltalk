@@ -24,3 +24,4 @@ dist-ssr
 *.sw?
 Notes/ruby-repl/results.json
 Notes/ruby-repl/report/
+Notes/ruby-repl/log.json
