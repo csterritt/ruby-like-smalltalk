@@ -24,6 +24,39 @@ import CodeList from "./components/CodeList.vue";
 import { emptyPanes, type PaneEntry, type Panes } from "./snapshot";
 
 const panes = ref<Panes>(emptyPanes());
+const ctxMenu = ref<{
+  x: number;
+  y: number;
+  area: keyof Panes;
+  entry: PaneEntry;
+} | null>(null);
+const ctxMenuEl = ref<HTMLElement | null>(null);
+
+async function openCtxMenu(area: keyof Panes, entry: PaneEntry, e: MouseEvent) {
+  ctxMenu.value = { x: e.clientX, y: e.clientY, area, entry };
+  await nextTick();
+  const el = ctxMenuEl.value;
+  const m = ctxMenu.value;
+  if (!el || !m) return;
+  const r = el.getBoundingClientRect();
+  ctxMenu.value = {
+    ...m,
+    x: Math.max(0, Math.min(m.x, window.innerWidth - r.width)),
+    y: Math.max(0, Math.min(m.y, window.innerHeight - r.height)),
+  };
+}
+
+function closeCtxMenu() {
+  ctxMenu.value = null;
+}
+
+function removeCtxEntry() {
+  const m = ctxMenu.value;
+  if (!m) return;
+  ctxMenu.value = null;
+  void consoleRef.value?.remove(m.area, m.entry);
+  consoleRef.value?.focus();
+}
 
 const LINE_WIDTH = 1;
 const FONT_FAMILY = '"Maple Mono NF"';
@@ -340,6 +373,7 @@ const consoleRef = ref<{
   ctrlC(): Promise<void>;
   focus(): void;
   restore(e: PaneEntry): Promise<void>;
+  remove(area: keyof Panes, e: PaneEntry): Promise<void>;
 } | null>(null);
 
 function restoreEntry(e: PaneEntry) {
@@ -464,6 +498,9 @@ async function chooseDirectory() {
 
 function onDocPointerDown(e: PointerEvent) {
   const target = e.target as Node;
+  if (ctxMenu.value && !ctxMenuEl.value?.contains(target)) {
+    closeCtxMenu();
+  }
   if (
     menuOpen.value &&
     !menuEl.value?.contains(target) &&
@@ -490,6 +527,7 @@ function onKeyDown(e: KeyboardEvent) {
     closeDir();
     closeFile();
     menuOpen.value = false;
+    closeCtxMenu();
     return;
   }
   if (fileView.value && (e.key === "PageDown" || e.key === "PageUp")) {
@@ -602,9 +640,9 @@ onUnmounted(() => {
 <template>
   <div ref="container" class="panes">
     <section class="pane side" :style="{ width: `${leftFraction * 100}%` }">
-      <div class="area"><div v-if="!panes.locals.length" class="area-hint">Variables</div><VarList :entries="panes.locals" @restore="restoreEntry" /></div>
-      <div class="area"><div v-if="!panes.ivars.length" class="area-hint">@ variables</div><VarList :entries="panes.ivars" @restore="restoreEntry" /></div>
-      <div class="area"><div v-if="!panes.classes.length" class="area-hint">Classes</div><CodeList :entries="panes.classes" @restore="restoreEntry" /></div>
+      <div class="area"><div v-if="!panes.locals.length" class="area-hint">Variables</div><VarList :entries="panes.locals" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('locals', e, ev)" /></div>
+      <div class="area"><div v-if="!panes.ivars.length" class="area-hint">@ variables</div><VarList :entries="panes.ivars" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('ivars', e, ev)" /></div>
+      <div class="area"><div v-if="!panes.classes.length" class="area-hint">Classes</div><CodeList :entries="panes.classes" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('classes', e, ev)" /></div>
     </section>
     <div class="divider">
       <div class="handle" @pointerdown.prevent="startDrag('left', $event)"></div>
@@ -698,9 +736,17 @@ onUnmounted(() => {
       <div class="handle" @pointerdown.prevent="startDrag('right', $event)"></div>
     </div>
     <section class="pane side" :style="{ width: `${rightFraction * 100}%` }">
-      <div class="area"><div v-if="!panes.methods.length" class="area-hint">Functions</div><CodeList :entries="panes.methods" @restore="restoreEntry" /></div>
+      <div class="area"><div v-if="!panes.methods.length" class="area-hint">Functions</div><CodeList :entries="panes.methods" @restore="restoreEntry" @menu="(e, ev) => openCtxMenu('methods', e, ev)" /></div>
       <div class="area"></div>
     </section>
+    <div
+      v-if="ctxMenu"
+      ref="ctxMenuEl"
+      class="ctx-menu"
+      :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
+    >
+      <div class="menu-item" role="menuitem" @click="removeCtxEntry">Remove</div>
+    </div>
   </div>
 </template>
 
@@ -805,6 +851,15 @@ body.dragging {
   top: 100%;
   right: 0;
   z-index: 3;
+  padding: 4px;
+  background-color: #f6f6f6;
+  border: 1px solid #888;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.ctx-menu {
+  position: fixed;
+  z-index: 4;
   padding: 4px;
   background-color: #f6f6f6;
   border: 1px solid #888;
@@ -992,7 +1047,8 @@ body.dragging {
     background-color: #2f2f2f;
   }
 
-  .dir-menu {
+  .dir-menu,
+  .ctx-menu {
     background-color: #2f2f2f;
     border-color: #777;
   }

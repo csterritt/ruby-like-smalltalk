@@ -3,7 +3,10 @@ import { ref } from "vue";
 import type { PaneEntry } from "../snapshot";
 
 defineProps<{ entries: PaneEntry[] }>();
-const emit = defineEmits<{ restore: [PaneEntry] }>();
+const emit = defineEmits<{
+  restore: [PaneEntry];
+  menu: [PaneEntry, MouseEvent];
+}>();
 
 const charMeasure = ref<HTMLElement | null>(null);
 
@@ -33,6 +36,7 @@ function onDblClick(entry: PaneEntry) {
       tabindex="0"
       @keydown="onKey"
       @dblclick="onDblClick(entry)"
+      @contextmenu.prevent="emit('menu', entry, $event)"
     >{{ entry.name }} = {{ entry.text }}</div>
   </div>
 </template>

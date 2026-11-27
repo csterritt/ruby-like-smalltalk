@@ -169,6 +169,7 @@ defineExpose({
   ctrlC: () => model.ctrlC(),
   focus,
   restore: (e: PaneEntry) => model.restore(e),
+  remove: (area: keyof Panes, e: PaneEntry) => model.remove(area, e),
 });
 </script>
 

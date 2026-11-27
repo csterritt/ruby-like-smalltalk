@@ -200,3 +200,109 @@ test("restore with pending entry warns and does not eval", async () => {
   expect(evals).toBe(0);
   expect(notices(m).some((t) => t.includes("finish or cancel"))).toBe(true);
 });
+
+test("remove stale entry removes it without eval", async () => {
+  let evals = 0;
+  const m = mk({ ...backend, eval: async () => (++evals, 1) });
+  result(m, { snapshot: snapOf([{ name: "x", text: "14", code: "x = 14" }]) });
+  result(m, { snapshot: snapOf([]) }); // x now stale
+  await m.remove("locals", m.state.panes.locals[0]);
+  expect(m.state.panes.locals).toEqual([]);
+  expect(evals).toBe(0);
+});
+
+test("remove live local evals nil and hides it until reassigned", async () => {
+  const calls: string[] = [];
+  const m = mk({
+    ...backend,
+    eval: async (code) => {
+      calls.push(code);
+      return 1;
+    },
+  });
+  result(m, { snapshot: snapOf([{ name: "x", text: "14", code: "x = 14" }]) });
+  const entry = m.state.panes.locals[0];
+  await m.remove("locals", entry);
+  expect(m.state.panes.locals).toEqual([]);
+  expect(calls).toEqual(["x = nil\n"]);
+  const inputs = m.state.items.filter((i) => i.kind === "input");
+  expect(inputs[inputs.length - 1]).toEqual({
+    kind: "input",
+    prompt: "rb> ",
+    text: "x = nil",
+  });
+  // the follow-up snapshot still reports x = nil -> stays hidden
+  result(m, { snapshot: snapOf([{ name: "x", text: "nil" }]) });
+  expect(m.state.panes.locals).toEqual([]);
+  // reappears when it holds a real value again
+  result(m, { snapshot: snapOf([{ name: "x", text: "5", code: "x = 5" }]) });
+  expect(m.state.panes.locals).toEqual([
+    { name: "x", text: "5", code: "x = 5", stale: false },
+  ]);
+});
+
+test("remove codes for ivar, method, class", async () => {
+  const calls: string[] = [];
+  const m = mk({
+    ...backend,
+    eval: async (code) => {
+      calls.push(code);
+      return 1;
+    },
+  });
+  const mkSnap = (
+    ivars: Entry[] = [],
+    classes: Entry[] = [],
+    methods: Entry[] = [],
+  ): Snapshot => ({ locals: [], ivars, classes, methods });
+  result(m, {
+    snapshot: mkSnap(
+      [{ name: "@shoe", text: "10" }],
+      [{ name: "Foo", text: "class Foo" }],
+      [{ name: "sq", text: "def sq(n) = n * n" }],
+    ),
+  });
+  await m.remove("ivars", m.state.panes.ivars[0]);
+  result(m, { status: "ok" }); // back to idle
+  await m.remove("methods", m.state.panes.methods[0]);
+  result(m, { status: "ok" }); // back to idle
+  await m.remove("classes", m.state.panes.classes[0]);
+  expect(calls).toEqual(["@shoe = nil\n", "undef sq\n", "Object.send(:remove_const, :Foo)\n"]);
+  expect(m.state.panes.ivars).toEqual([]);
+  expect(m.state.panes.methods).toEqual([]);
+  expect(m.state.panes.classes).toEqual([]);
+});
+
+test("remove while busy or with pending warns, list unchanged", async () => {
+  let evals = 0;
+  const m = mk({ ...backend, eval: async () => (++evals, 1) });
+  result(m, { snapshot: snapOf([{ name: "x", text: "14" }]) });
+  m.setLine("sleep 1");
+  await m.enter();
+  evals = 0;
+  await m.remove("locals", m.state.panes.locals[0]);
+  expect(evals).toBe(0);
+  expect(m.state.panes.locals.length).toBe(1);
+  expect(notices(m).some((t) => t === "Can't remove x while Ruby is busy.")).toBe(true);
+
+  const m2 = mk({ ...backend, check: async () => false, eval: async () => (++evals, 1) });
+  result(m2, { snapshot: snapOf([{ name: "x", text: "14" }]) });
+  m2.setLine("def f");
+  await m2.enter();
+  evals = 0;
+  await m2.remove("locals", m2.state.panes.locals[0]);
+  expect(evals).toBe(0);
+  expect(m2.state.panes.locals.length).toBe(1);
+  expect(notices(m2).some((t) => t === "Can't remove x: finish or cancel the current entry first.")).toBe(true);
+});
+
+test("hidden locals cleared on started generation > 1", async () => {
+  const m = mk();
+  result(m, { snapshot: snapOf([{ name: "x", text: "14", code: "x = 14" }]) });
+  await m.remove("locals", m.state.panes.locals[0]);
+  result(m, { snapshot: snapOf([{ name: "x", text: "nil" }]) });
+  expect(m.state.panes.locals).toEqual([]);
+  m.onEvent({ type: "started", generation: 2, version: "ruby" });
+  result(m, { snapshot: snapOf([{ name: "x", text: "nil" }]) });
+  expect(m.state.panes.locals).toEqual([{ name: "x", text: "nil", stale: false }]);
+});

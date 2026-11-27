@@ -2,7 +2,10 @@
 import { previewLines, type PaneEntry } from "../snapshot";
 
 defineProps<{ entries: PaneEntry[] }>();
-const emit = defineEmits<{ restore: [PaneEntry] }>();
+const emit = defineEmits<{
+  restore: [PaneEntry];
+  menu: [PaneEntry, MouseEvent];
+}>();
 
 function onDblClick(entry: PaneEntry) {
   if (!entry.stale) return;
@@ -19,6 +22,7 @@ function onDblClick(entry: PaneEntry) {
       class="code-entry"
       :class="{ stale: entry.stale }"
       @dblclick="onDblClick(entry)"
+      @contextmenu.prevent="emit('menu', entry, $event)"
     >
       <div
         v-for="(line, i) in previewLines(entry.text)"

@@ -285,34 +285,29 @@ export class ConsoleModel {
     this.draft = null;
   }
 
-  async restore(entry: PaneEntry): Promise<void> {
+  private guard(verb: string, name: string): boolean {
     const st = this.state;
-    if (!entry.code) {
-      this.pushItem({
-        kind: "notice",
-        tone: "warn",
-        text: `Can't restore ${entry.name}: no Ruby source for it was recorded.`,
-      });
-      return;
-    }
     if (st.mode !== "idle") {
       this.pushItem({
         kind: "notice",
         tone: "warn",
-        text: `Can't restore ${entry.name} while Ruby is busy.`,
+        text: `Can't ${verb} ${name} while Ruby is busy.`,
       });
-      return;
+      return false;
     }
     if (st.pending.length > 0) {
       this.pushItem({
         kind: "notice",
         tone: "warn",
-        text: `Can't restore ${entry.name}: finish or cancel the current entry first.`,
+        text: `Can't ${verb} ${name}: finish or cancel the current entry first.`,
       });
-      return;
+      return false;
     }
+    return true;
+  }
+
+  private async runCode(code: string): Promise<void> {
     this.endRecall();
-    const code = entry.code;
     code.split("\n").forEach((text, i) => {
       this.state.items.push({
         kind: "input",
@@ -329,6 +324,71 @@ export class ConsoleModel {
       this.pushItem({ kind: "notice", tone: "warn", text: String(e) });
       if (this.evalSeq === evSeq) this.setMode("idle");
     }
+  }
+
+  async restore(entry: PaneEntry): Promise<void> {
+    if (!entry.code) {
+      this.pushItem({
+        kind: "notice",
+        tone: "warn",
+        text: `Can't restore ${entry.name}: no Ruby source for it was recorded.`,
+      });
+      return;
+    }
+    if (!this.guard("restore", entry.name)) return;
+    await this.runCode(entry.code);
+  }
+
+  private hidden = {
+    locals: new Set<string>(),
+    ivars: new Set<string>(),
+  };
+
+  private filterHidden(snap: Snapshot) {
+    for (const area of ["locals", "ivars"] as const) {
+      const hidden = this.hidden[area];
+      snap[area] = snap[area].filter((e) => {
+        if (!hidden.has(e.name)) return true;
+        if (e.text === "nil") return false;
+        hidden.delete(e.name);
+        return true;
+      });
+    }
+  }
+
+  private removeEntry(area: keyof Panes, name: string) {
+    const st = this.state;
+    st.panes = {
+      ...st.panes,
+      [area]: st.panes[area].filter((e) => e.name !== name),
+    };
+  }
+
+  async remove(area: keyof Panes, entry: PaneEntry): Promise<void> {
+    if (entry.stale) {
+      this.removeEntry(area, entry.name);
+      return;
+    }
+    if (!this.guard("remove", entry.name)) return;
+    this.removeEntry(area, entry.name);
+    let code: string;
+    switch (area) {
+      case "locals":
+        this.hidden.locals.add(entry.name);
+        code = `${entry.name} = nil`;
+        break;
+      case "ivars":
+        this.hidden.ivars.add(entry.name);
+        code = `${entry.name} = nil`;
+        break;
+      case "methods":
+        code = `undef ${entry.name}`;
+        break;
+      case "classes":
+        code = `Object.send(:remove_const, :${entry.name})`;
+        break;
+    }
+    await this.runCode(code);
   }
 
   setLine(text: string) {
@@ -363,7 +423,11 @@ export class ConsoleModel {
     switch (ev.type) {
       case "started": {
         st.version = ev.version;
-        if (ev.generation > 1) st.panes = staleAll(st.panes);
+        if (ev.generation > 1) {
+          st.panes = staleAll(st.panes);
+          this.hidden.locals.clear();
+          this.hidden.ivars.clear();
+        }
         if (st.mode !== "busy") this.setMode("idle");
         if (ev.generation === 1) {
           this.pushItem({ kind: "notice", tone: "info", text: ev.version });
@@ -386,7 +450,10 @@ export class ConsoleModel {
       }
       case "result": {
         this.clearStillTimer();
-        if (ev.snapshot) st.panes = mergePanes(st.panes, ev.snapshot);
+        if (ev.snapshot) {
+          this.filterHidden(ev.snapshot);
+          st.panes = mergePanes(st.panes, ev.snapshot);
+        }
         switch (ev.status) {
           case "ok":
             this.pushItem({ kind: "value", text: ev.value ?? "" });
@@ -419,6 +486,8 @@ export class ConsoleModel {
               text: "Ruby didn't stop on Ctrl-C, so it was killed. A fresh session is starting; earlier definitions are gone.",
             });
             st.panes = staleAll(st.panes);
+            this.hidden.locals.clear();
+            this.hidden.ivars.clear();
             this.setMode("starting");
             break;
           case "exited": {
@@ -434,6 +503,8 @@ export class ConsoleModel {
               text: `Ruby exited (${how}). A fresh session is starting; earlier definitions are gone.`,
             });
             st.panes = staleAll(st.panes);
+            this.hidden.locals.clear();
+            this.hidden.ivars.clear();
             this.setMode("starting");
             break;
           }

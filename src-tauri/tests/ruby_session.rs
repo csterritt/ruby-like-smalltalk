@@ -1061,3 +1061,37 @@ fn v10_class_and_method_code() {
     );
     scn.finish();
 }
+
+#[test]
+fn v11_undef_and_remove_const() {
+    let mut scn = Scn::new(
+        "V11",
+        "S15",
+        "undef/remove_const drop entries; nil ivar still reported",
+        "sq and Foo gone; @a stays with text nil",
+    );
+    scn.eval_and_wait("def sq(n) = n * n");
+    let ev = scn.eval_and_wait("undef sq").unwrap_or_default();
+    scn.check(
+        !snap_entries(&ev, "methods").iter().any(|(n, _)| n == "sq"),
+        format!("methods still has sq: {:?}", snap_entries(&ev, "methods")),
+    );
+
+    scn.eval_and_wait("class Foo; end");
+    let ev = scn
+        .eval_and_wait("Object.send(:remove_const, :Foo)")
+        .unwrap_or_default();
+    scn.check(
+        !snap_entries(&ev, "classes").iter().any(|(n, _)| n == "Foo"),
+        format!("classes still has Foo: {:?}", snap_entries(&ev, "classes")),
+    );
+
+    scn.eval_and_wait("@a = 1");
+    let ev = scn.eval_and_wait("@a = nil").unwrap_or_default();
+    scn.check(
+        snap_entries(&ev, "ivars")
+            .contains(&("@a".to_string(), "nil".to_string())),
+        format!("ivars: {:?}", snap_entries(&ev, "ivars")),
+    );
+    scn.finish();
+}
