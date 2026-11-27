@@ -1,3 +1,5 @@
+import { emptySnapshot, type Snapshot } from "./snapshot";
+
 export type RubyEvent =
   | { type: "started"; generation: number; version: string }
   | { type: "output"; stream: "stdout" | "stderr"; text: string }
@@ -12,6 +14,7 @@ export type RubyEvent =
       syntax?: boolean;
       exitCode?: number;
       signal?: number;
+      snapshot?: Snapshot;
     }
   | { type: "exited"; generation: number; exitCode?: number; signal?: number; reason: string }
   | { type: "unavailable"; message: string };
@@ -37,10 +40,18 @@ export interface ConsoleState {
   line: string;
   mode: "starting" | "idle" | "checking" | "busy" | "unavailable";
   version: string | null;
+  snapshot: Snapshot;
 }
 
 export function initialState(): ConsoleState {
-  return { items: [], pending: [], line: "", mode: "starting", version: null };
+  return {
+    items: [],
+    pending: [],
+    line: "",
+    mode: "starting",
+    version: null,
+    snapshot: emptySnapshot(),
+  };
 }
 
 export interface Timers {
@@ -306,6 +317,7 @@ export class ConsoleModel {
     switch (ev.type) {
       case "started": {
         st.version = ev.version;
+        if (ev.generation > 1) st.snapshot = emptySnapshot();
         if (st.mode !== "busy") this.setMode("idle");
         if (ev.generation === 1) {
           this.pushItem({ kind: "notice", tone: "info", text: ev.version });
@@ -328,6 +340,7 @@ export class ConsoleModel {
       }
       case "result": {
         this.clearStillTimer();
+        if (ev.snapshot) st.snapshot = ev.snapshot;
         switch (ev.status) {
           case "ok":
             this.pushItem({ kind: "value", text: ev.value ?? "" });
@@ -359,6 +372,7 @@ export class ConsoleModel {
               tone: "warn",
               text: "Ruby didn't stop on Ctrl-C, so it was killed. A fresh session is starting; earlier definitions are gone.",
             });
+            st.snapshot = emptySnapshot();
             this.setMode("starting");
             break;
           case "exited": {
@@ -373,6 +387,7 @@ export class ConsoleModel {
               tone: "warn",
               text: `Ruby exited (${how}). A fresh session is starting; earlier definitions are gone.`,
             });
+            st.snapshot = emptySnapshot();
             this.setMode("starting");
             break;
           }

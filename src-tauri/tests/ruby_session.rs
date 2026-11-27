@@ -355,6 +355,23 @@ impl Scn {
     }
 }
 
+fn snap_entries(ev: &Value, area: &str) -> Vec<(String, String)> {
+    ev.get("snapshot")
+        .and_then(|s| s.get(area))
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|e| {
+                    (
+                        e.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        e.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn status_of(ev: &Value) -> Option<String> {
     ev.get("status").and_then(|v| v.as_str()).map(str::to_owned)
 }
@@ -835,5 +852,145 @@ fn e24_underscore_last_value() {
     scn.expect_eq(status, Some("error".to_string()), "nil.foo is an error");
     let v = scn.eval_value("_");
     scn.expect_eq(v, Some("\"x\"".to_string()), "_ unchanged by the error");
+    scn.finish();
+}
+
+// ---------- Snapshot scenarios ----------
+
+#[test]
+fn v01_locals_snapshot() {
+    let mut scn = Scn::new("V01", "S15", "locals appear and update", "x = 14 then x = [1, 2]");
+    let ev = scn.eval_and_wait("x = 14").unwrap_or_default();
+    scn.expect_eq(
+        snap_entries(&ev, "locals"),
+        vec![("x".to_string(), "14".to_string())],
+        "locals after x = 14",
+    );
+    let ev = scn.eval_and_wait("x = [1, 2]").unwrap_or_default();
+    scn.expect_eq(
+        snap_entries(&ev, "locals"),
+        vec![("x".to_string(), "[1, 2]".to_string())],
+        "locals after reassign",
+    );
+    scn.check(
+        !snap_entries(&ev, "locals").iter().any(|(n, _)| n == "_"),
+        "_ appears in locals".to_string(),
+    );
+    scn.finish();
+}
+
+#[test]
+fn v02_ivars_snapshot() {
+    let mut scn = Scn::new("V02", "S15", "main ivars appear", "@shoe_size = 10");
+    let ev = scn.eval_and_wait("@shoe_size = 10").unwrap_or_default();
+    scn.expect_eq(
+        snap_entries(&ev, "ivars"),
+        vec![("@shoe_size".to_string(), "10".to_string())],
+        "ivars",
+    );
+    scn.finish();
+}
+
+#[test]
+fn v03_class_snapshot() {
+    let mut scn = Scn::new("V03", "S15", "class definitions appear with source", "Foo source");
+    let src = "class Foo\n  def a\n  end\n  def b\n  end\nend";
+    let ev = scn.eval_and_wait(src).unwrap_or_default();
+    scn.expect_eq(
+        snap_entries(&ev, "classes"),
+        vec![("Foo".to_string(), src.to_string())],
+        "classes",
+    );
+    scn.finish();
+}
+
+#[test]
+fn v04_method_snapshot() {
+    let mut scn = Scn::new("V04", "S15", "method defs appear and update", "sq source");
+    let ev = scn.eval_and_wait("def sq(n) = n * n").unwrap_or_default();
+    scn.check(
+        snap_entries(&ev, "methods")
+            .contains(&("sq".to_string(), "def sq(n) = n * n".to_string())),
+        format!("methods: {:?}", snap_entries(&ev, "methods")),
+    );
+    let ev = scn.eval_and_wait("def sq(n) = n + n").unwrap_or_default();
+    scn.check(
+        snap_entries(&ev, "methods")
+            .contains(&("sq".to_string(), "def sq(n) = n + n".to_string())),
+        format!("methods after redef: {:?}", snap_entries(&ev, "methods")),
+    );
+    scn.finish();
+}
+
+#[test]
+fn v05_error_keeps_old_method_source() {
+    let mut scn = Scn::new(
+        "V05",
+        "S15",
+        "erroring def does not overwrite recorded source",
+        "g keeps first source",
+    );
+    let ev = scn.eval_and_wait("def g\n  1\nend").unwrap_or_default();
+    scn.check(
+        snap_entries(&ev, "methods")
+            .contains(&("g".to_string(), "def g\n  1\nend".to_string())),
+        format!("methods: {:?}", snap_entries(&ev, "methods")),
+    );
+    let ev = scn
+        .eval_and_wait("raise \"boom\"; def g\n  2\nend")
+        .unwrap_or_default();
+    scn.expect_eq(status_of(&ev), Some("error".to_string()), "status");
+    scn.check(ev.get("snapshot").is_some(), "no snapshot".to_string());
+    scn.check(
+        snap_entries(&ev, "methods")
+            .contains(&("g".to_string(), "def g\n  1\nend".to_string())),
+        format!("methods after error: {:?}", snap_entries(&ev, "methods")),
+    );
+    scn.finish();
+}
+
+#[test]
+fn v06_method_defined_before_raise() {
+    let mut scn = Scn::new("V06", "S15", "def before a raise is captured", "h present after error");
+    let ev = scn.eval_and_wait("def h = 1; raise \"boom\"").unwrap_or_default();
+    scn.expect_eq(status_of(&ev), Some("error".to_string()), "status");
+    scn.check(
+        snap_entries(&ev, "methods")
+            .contains(&("h".to_string(), "def h = 1".to_string())),
+        format!("methods: {:?}", snap_entries(&ev, "methods")),
+    );
+    scn.finish();
+}
+
+#[test]
+fn v07_inspect_raises_still_snapshots() {
+    let mut scn = Scn::new("V07", "S15", "bad inspect tolerated in snapshot", "o has fallback text");
+    let ev = scn
+        .eval_and_wait("o = Object.new; def o.inspect = raise(\"no\"); o")
+        .unwrap_or_default();
+    let locals = snap_entries(&ev, "locals");
+    let o = locals.iter().find(|(n, _)| n == "o").map(|(_, t)| t.clone());
+    match o {
+        Some(t) => {
+            scn.check(t.starts_with("#<Object"), format!("o text {t:?}"));
+            scn.check(t.contains("inspect raised"), format!("o text {t:?}"));
+        }
+        None => scn.check(false, format!("no o in locals: {locals:?}")),
+    }
+    scn.finish();
+}
+
+#[test]
+fn v08_long_value_truncated() {
+    let mut scn = Scn::new("V08", "S15", "long values truncated", "big <= 4001 chars + ellipsis");
+    let ev = scn.eval_and_wait("big = (1..5000).to_a").unwrap_or_default();
+    let locals = snap_entries(&ev, "locals");
+    let t = locals
+        .iter()
+        .find(|(n, _)| n == "big")
+        .map(|(_, t)| t.clone())
+        .unwrap_or_default();
+    scn.check(t.chars().count() <= 4001, format!("len {}", t.chars().count()));
+    scn.check(t.ends_with('…'), format!("no ellipsis: ...{:?}", &t[t.len().saturating_sub(20)..]));
     scn.finish();
 }

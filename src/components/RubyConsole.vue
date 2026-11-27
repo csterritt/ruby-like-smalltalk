@@ -12,8 +12,10 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ConsoleModel, initialState, type Backend, type Item, type RubyEvent } from "../console";
+import type { Snapshot } from "../snapshot";
 
 const props = defineProps<{ suspended: boolean }>();
+const emit = defineEmits<{ snapshot: [Snapshot] }>();
 
 const backend: Backend = {
   check: (code) => invoke<boolean>("ruby_check", { code }),
@@ -24,6 +26,11 @@ const backend: Backend = {
 
 const state = reactive(initialState());
 const model = new ConsoleModel(backend, state);
+
+watch(
+  () => state.snapshot,
+  (s) => emit("snapshot", s),
+);
 
 const rootEl = ref<HTMLDivElement | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);

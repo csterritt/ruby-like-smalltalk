@@ -63,6 +63,8 @@ pub enum RubyEvent {
         exit_code: Option<i32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         signal: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        snapshot: Option<serde_json::Value>,
     },
     Exited {
         generation: u64,
@@ -243,6 +245,7 @@ fn result_event_from_reply(id: u64, reply: &serde_json::Value) -> RubyEvent {
         syntax: get("syntax").and_then(|v| v.as_bool()),
         exit_code: None,
         signal: None,
+        snapshot: get("snapshot"),
     }
 }
 
@@ -400,6 +403,7 @@ fn reaper(
                         syntax: None,
                         exit_code: code,
                         signal: sig,
+                        snapshot: None,
                     },
                 );
             }
@@ -673,6 +677,7 @@ impl Session {
                 syntax: None,
                 exit_code: None,
                 signal: Some(libc::SIGKILL),
+                snapshot: None,
             },
         );
         emit(

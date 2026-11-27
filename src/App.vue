@@ -19,6 +19,11 @@ import {
 import FileName from "./components/FileName.vue";
 import GearIcon from "./components/GearIcon.vue";
 import RubyConsole from "./components/RubyConsole.vue";
+import VarList from "./components/VarList.vue";
+import CodeList from "./components/CodeList.vue";
+import { emptySnapshot, type Snapshot } from "./snapshot";
+
+const snapshot = ref<Snapshot>(emptySnapshot());
 
 const LINE_WIDTH = 1;
 const FONT_FAMILY = '"Maple Mono NF"';
@@ -587,7 +592,11 @@ onUnmounted(() => {
 
 <template>
   <div ref="container" class="panes">
-    <section class="pane" :style="{ width: `${leftFraction * 100}%` }"></section>
+    <section class="pane side" :style="{ width: `${leftFraction * 100}%` }">
+      <div class="area"><VarList :entries="snapshot.locals" /></div>
+      <div class="area"><VarList :entries="snapshot.ivars" /></div>
+      <div class="area"><CodeList :entries="snapshot.classes" /></div>
+    </section>
     <div class="divider">
       <div class="handle" @pointerdown.prevent="startDrag('left', $event)"></div>
     </div>
@@ -612,7 +621,11 @@ onUnmounted(() => {
         </div>
       </div>
       <div ref="dirBody" class="dir-body">
-        <RubyConsole ref="consoleRef" :suspended="dirOpen || !!fileView" />
+        <RubyConsole
+          ref="consoleRef"
+          :suspended="dirOpen || !!fileView"
+          @snapshot="snapshot = $event"
+        />
         <div v-if="dirOpen" ref="dropdown" class="dir-dropdown">
           <span ref="gapEl" class="gap-measure" aria-hidden="true">{{ "  " }}</span>
           <div v-if="dirError" class="dir-message">{{ dirError }}</div>
@@ -675,7 +688,10 @@ onUnmounted(() => {
     <div class="divider">
       <div class="handle" @pointerdown.prevent="startDrag('right', $event)"></div>
     </div>
-    <section class="pane" :style="{ width: `${rightFraction * 100}%` }"></section>
+    <section class="pane side" :style="{ width: `${rightFraction * 100}%` }">
+      <div class="area"><CodeList :entries="snapshot.methods" /></div>
+      <div class="area"></div>
+    </section>
   </div>
 </template>
 
@@ -717,6 +733,23 @@ body.dragging {
   flex-direction: column;
   position: relative;
   overflow: hidden;
+}
+
+.pane.side {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.area {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 8px;
+}
+
+.area + .area {
+  border-top: 1px solid #888;
 }
 
 .dir-header {
@@ -931,6 +964,10 @@ body.dragging {
   .dir-header,
   .dir-dropdown {
     border-bottom-color: #777;
+  }
+
+  .area + .area {
+    border-top-color: #777;
   }
 
   .dir-dropdown {

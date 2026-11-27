@@ -2,6 +2,11 @@ require "socket"
 require "json"
 require "irb"
 
+begin
+  require "prism"
+rescue LoadError
+end
+
 if [Encoding::US_ASCII, Encoding::ASCII_8BIT].include?(Encoding.default_external)
   Encoding.default_external = Encoding::UTF_8
   STDIN.set_encoding(Encoding::UTF_8)
@@ -13,6 +18,10 @@ class RLS__Driver
   def initialize
     @nonce = ENV.fetch("RLS_NONCE")
     @busy = false
+    @method_src = {}
+    @class_src = {}
+    @seen_order = {}
+    @next_seq = 0
   end
 
   def run
@@ -56,6 +65,7 @@ class RLS__Driver
 
   def eval_entry(sock, id, code)
     @busy = true
+    before = rls_methods
     status =
       begin
         result = eval(code, TOPLEVEL_BINDING, "(rls)", 1)
@@ -73,26 +83,132 @@ class RLS__Driver
           backtrace: rls_frames(e),
           syntax: e.is_a?(SyntaxError),
         }
-      ensure
-        @busy = false
       end
+    record_sources(code, before, rls_methods)
+    snapshot =
+      begin
+        build_snapshot
+      rescue Exception
+        nil
+      end
+    @busy = false
     markers = write_markers(id)
-    reply(sock, status.merge(id: id, markers: markers))
+    msg = status.merge(id: id, markers: markers)
+    msg[:snapshot] = snapshot if snapshot
+    reply(sock, msg)
   end
 
   def reply_ok(obj)
-    value =
-      begin
-        v = obj.inspect
-        v.is_a?(String) ? v : v.to_s
-      rescue Exception => e
-        begin
-          "#<#{obj.class} (inspect raised #{e.class}: #{e.message})>"
-        rescue Exception
-          "#<uninspectable>"
+    { status: "ok", value: inspect_safe(obj) }
+  end
+
+  def inspect_safe(obj)
+    v = obj.inspect
+    v.is_a?(String) ? v : v.to_s
+  rescue Exception => e
+    begin
+      "#<#{obj.class} (inspect raised #{e.class}: #{e.message})>"
+    rescue Exception
+      "#<uninspectable>"
+    end
+  end
+
+  def render_value(obj)
+    v = inspect_safe(obj).gsub(/\r?\n/, " ")
+    v.length > 4000 ? v[0, 4000] + "…" : v
+  end
+
+  # Methods defined at the top level of evaluated code land on Object as
+  # private methods whose source location is "(rls)".
+  def rls_methods
+    (Object.instance_methods(false) + Object.private_instance_methods(false))
+      .uniq
+      .each_with_object({}) do |name, h|
+        m = Object.instance_method(name)
+        loc = m.source_location
+        h[name.to_s] = m if loc && loc.first == "(rls)"
+      rescue Exception
+        nil
+      end
+  end
+
+  def record_sources(code, before, after)
+    return unless defined?(Prism)
+    walk_sources(Prism.parse(code).value, before, after)
+  rescue Exception
+    nil
+  end
+
+  def walk_sources(node, before, after)
+    return unless node.is_a?(Prism::Node)
+    case node
+    when Prism::DefNode
+      if node.receiver.nil?
+        name = node.name.to_s
+        m = after[name]
+        if m && (before[name].nil? || before[name] != m)
+          @method_src[name] = node.slice
         end
       end
-    { status: "ok", value: value }
+    when Prism::ClassNode, Prism::ModuleNode
+      @class_src[node.constant_path.slice] = node.slice
+    when Prism::SingletonClassNode
+      # methods defined via `class << self` are not top-level methods
+    else
+      node.compact_child_nodes.each { |c| walk_sources(c, before, after) }
+    end
+  end
+
+  def build_snapshot
+    recv = TOPLEVEL_BINDING.receiver
+    {
+      locals: TOPLEVEL_BINDING.local_variables.filter_map { |n|
+        next if n == :_
+        { name: n.to_s, text: render_value(TOPLEVEL_BINDING.local_variable_get(n)) }
+      },
+      ivars: recv.instance_variables.filter_map { |n|
+        begin
+          { name: n.to_s, text: render_value(recv.instance_variable_get(n)) }
+        rescue Exception
+          nil
+        end
+      },
+      classes: rls_classes,
+      methods: rls_methods_snapshot,
+    }
+  end
+
+  def rls_classes
+    Object.constants.filter_map do |c|
+      begin
+        loc = Object.const_source_location(c)
+        next unless loc && loc.first == "(rls)"
+        val = Object.const_get(c)
+        next unless val.is_a?(Module)
+        name = c.to_s
+        text = @class_src[name] || class_fallback(name, val)
+        { name: name, text: text }
+      rescue Exception
+        nil
+      end
+    end
+  end
+
+  def class_fallback(name, val)
+    if val.is_a?(Class)
+      sup = val.superclass
+      sup && sup != Object ? "class #{name} < #{sup}" : "class #{name}"
+    else
+      "module #{name}"
+    end
+  end
+
+  def rls_methods_snapshot
+    after = rls_methods
+    after.each_key { |n| @seen_order[n] ||= (@next_seq += 1) }
+    after.keys.sort_by { |n| @seen_order[n] }.map do |name|
+      { name: name, text: @method_src[name] || "def #{name}" }
+    end
   end
 
   def error_message(e)
