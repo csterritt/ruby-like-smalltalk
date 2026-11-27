@@ -1,4 +1,4 @@
-import { emptySnapshot, type Snapshot } from "./snapshot";
+import { emptyPanes, mergePanes, staleAll, type PaneEntry, type Panes, type Snapshot } from "./snapshot";
 
 export type RubyEvent =
   | { type: "started"; generation: number; version: string }
@@ -40,7 +40,7 @@ export interface ConsoleState {
   line: string;
   mode: "starting" | "idle" | "checking" | "busy" | "unavailable";
   version: string | null;
-  snapshot: Snapshot;
+  panes: Panes;
 }
 
 export function initialState(): ConsoleState {
@@ -50,7 +50,7 @@ export function initialState(): ConsoleState {
     line: "",
     mode: "starting",
     version: null,
-    snapshot: emptySnapshot(),
+    panes: emptyPanes(),
   };
 }
 
@@ -285,6 +285,52 @@ export class ConsoleModel {
     this.draft = null;
   }
 
+  async restore(entry: PaneEntry): Promise<void> {
+    const st = this.state;
+    if (!entry.code) {
+      this.pushItem({
+        kind: "notice",
+        tone: "warn",
+        text: `Can't restore ${entry.name}: no Ruby source for it was recorded.`,
+      });
+      return;
+    }
+    if (st.mode !== "idle") {
+      this.pushItem({
+        kind: "notice",
+        tone: "warn",
+        text: `Can't restore ${entry.name} while Ruby is busy.`,
+      });
+      return;
+    }
+    if (st.pending.length > 0) {
+      this.pushItem({
+        kind: "notice",
+        tone: "warn",
+        text: `Can't restore ${entry.name}: finish or cancel the current entry first.`,
+      });
+      return;
+    }
+    this.endRecall();
+    const code = entry.code;
+    code.split("\n").forEach((text, i) => {
+      this.state.items.push({
+        kind: "input",
+        prompt: i === 0 ? "rb> " : "..> ",
+        text,
+      });
+    });
+    this.enforceCaps();
+    this.setMode("busy");
+    const evSeq = ++this.evalSeq;
+    try {
+      await this.backend.eval(code + "\n");
+    } catch (e) {
+      this.pushItem({ kind: "notice", tone: "warn", text: String(e) });
+      if (this.evalSeq === evSeq) this.setMode("idle");
+    }
+  }
+
   setLine(text: string) {
     this.endRecall();
     this.state.line = text;
@@ -317,7 +363,7 @@ export class ConsoleModel {
     switch (ev.type) {
       case "started": {
         st.version = ev.version;
-        if (ev.generation > 1) st.snapshot = emptySnapshot();
+        if (ev.generation > 1) st.panes = staleAll(st.panes);
         if (st.mode !== "busy") this.setMode("idle");
         if (ev.generation === 1) {
           this.pushItem({ kind: "notice", tone: "info", text: ev.version });
@@ -340,7 +386,7 @@ export class ConsoleModel {
       }
       case "result": {
         this.clearStillTimer();
-        if (ev.snapshot) st.snapshot = ev.snapshot;
+        if (ev.snapshot) st.panes = mergePanes(st.panes, ev.snapshot);
         switch (ev.status) {
           case "ok":
             this.pushItem({ kind: "value", text: ev.value ?? "" });
@@ -372,7 +418,7 @@ export class ConsoleModel {
               tone: "warn",
               text: "Ruby didn't stop on Ctrl-C, so it was killed. A fresh session is starting; earlier definitions are gone.",
             });
-            st.snapshot = emptySnapshot();
+            st.panes = staleAll(st.panes);
             this.setMode("starting");
             break;
           case "exited": {
@@ -387,7 +433,7 @@ export class ConsoleModel {
               tone: "warn",
               text: `Ruby exited (${how}). A fresh session is starting; earlier definitions are gone.`,
             });
-            st.snapshot = emptySnapshot();
+            st.panes = staleAll(st.panes);
             this.setMode("starting");
             break;
           }

@@ -21,9 +21,9 @@ import GearIcon from "./components/GearIcon.vue";
 import RubyConsole from "./components/RubyConsole.vue";
 import VarList from "./components/VarList.vue";
 import CodeList from "./components/CodeList.vue";
-import { emptySnapshot, type Snapshot } from "./snapshot";
+import { emptyPanes, type PaneEntry, type Panes } from "./snapshot";
 
-const snapshot = ref<Snapshot>(emptySnapshot());
+const panes = ref<Panes>(emptyPanes());
 
 const LINE_WIDTH = 1;
 const FONT_FAMILY = '"Maple Mono NF"';
@@ -336,7 +336,16 @@ const gapEl = ref<HTMLElement | null>(null);
 const gearButton = ref<HTMLElement | null>(null);
 const menuEl = ref<HTMLElement | null>(null);
 const menuOpen = ref(false);
-const consoleRef = ref<{ ctrlC(): Promise<void>; focus(): void } | null>(null);
+const consoleRef = ref<{
+  ctrlC(): Promise<void>;
+  focus(): void;
+  restore(e: PaneEntry): Promise<void>;
+} | null>(null);
+
+function restoreEntry(e: PaneEntry) {
+  void consoleRef.value?.restore(e);
+  consoleRef.value?.focus();
+}
 
 let cachedWidths: number[] = [];
 
@@ -593,9 +602,9 @@ onUnmounted(() => {
 <template>
   <div ref="container" class="panes">
     <section class="pane side" :style="{ width: `${leftFraction * 100}%` }">
-      <div class="area"><div v-if="!snapshot.locals.length" class="area-hint">Variables</div><VarList :entries="snapshot.locals" /></div>
-      <div class="area"><div v-if="!snapshot.ivars.length" class="area-hint">@ variables</div><VarList :entries="snapshot.ivars" /></div>
-      <div class="area"><div v-if="!snapshot.classes.length" class="area-hint">Classes</div><CodeList :entries="snapshot.classes" /></div>
+      <div class="area"><div v-if="!panes.locals.length" class="area-hint">Variables</div><VarList :entries="panes.locals" @restore="restoreEntry" /></div>
+      <div class="area"><div v-if="!panes.ivars.length" class="area-hint">@ variables</div><VarList :entries="panes.ivars" @restore="restoreEntry" /></div>
+      <div class="area"><div v-if="!panes.classes.length" class="area-hint">Classes</div><CodeList :entries="panes.classes" @restore="restoreEntry" /></div>
     </section>
     <div class="divider">
       <div class="handle" @pointerdown.prevent="startDrag('left', $event)"></div>
@@ -624,7 +633,7 @@ onUnmounted(() => {
         <RubyConsole
           ref="consoleRef"
           :suspended="dirOpen || !!fileView"
-          @snapshot="snapshot = $event"
+          @panes="panes = $event"
         />
         <div v-if="dirOpen" ref="dropdown" class="dir-dropdown">
           <span ref="gapEl" class="gap-measure" aria-hidden="true">{{ "  " }}</span>
@@ -689,7 +698,7 @@ onUnmounted(() => {
       <div class="handle" @pointerdown.prevent="startDrag('right', $event)"></div>
     </div>
     <section class="pane side" :style="{ width: `${rightFraction * 100}%` }">
-      <div class="area"><div v-if="!snapshot.methods.length" class="area-hint">Functions</div><CodeList :entries="snapshot.methods" /></div>
+      <div class="area"><div v-if="!panes.methods.length" class="area-hint">Functions</div><CodeList :entries="panes.methods" @restore="restoreEntry" /></div>
       <div class="area"></div>
     </section>
   </div>

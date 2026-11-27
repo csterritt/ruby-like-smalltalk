@@ -102,20 +102,39 @@ class RLS__Driver
     { status: "ok", value: inspect_safe(obj) }
   end
 
-  def inspect_safe(obj)
+  # [string, ok] — ok is false when inspect raised.
+  def inspect_full(obj)
     v = obj.inspect
-    v.is_a?(String) ? v : v.to_s
+    v = v.to_s unless v.is_a?(String)
+    [v, true]
   rescue Exception => e
     begin
-      "#<#{obj.class} (inspect raised #{e.class}: #{e.message})>"
+      ["#<#{obj.class} (inspect raised #{e.class}: #{e.message})>", false]
     rescue Exception
-      "#<uninspectable>"
+      ["#<uninspectable>", false]
     end
   end
 
-  def render_value(obj)
-    v = inspect_safe(obj).gsub(/\r?\n/, " ")
-    v.length > 4000 ? v[0, 4000] + "…" : v
+  def inspect_safe(obj)
+    inspect_full(obj).first
+  end
+
+  def var_entry(name, obj)
+    s, ok = inspect_full(obj)
+    text = s.gsub(/\r?\n/, " ")
+    text = text.length > 4000 ? text[0, 4000] + "…" : text
+    entry = { name: name, text: text }
+    if ok && s.length <= 100_000 && defined?(Prism)
+      code = "#{name} = #{s}"
+      begin
+        entry[:code] = code if Prism.parse(code).success?
+      rescue Exception
+        nil
+      end
+    end
+    entry
+  rescue Exception
+    { name: name, text: "#<uninspectable>" }
   end
 
   # Methods defined at the top level of evaluated code land on Object as
@@ -164,11 +183,11 @@ class RLS__Driver
     {
       locals: TOPLEVEL_BINDING.local_variables.filter_map { |n|
         next if n == :_
-        { name: n.to_s, text: render_value(TOPLEVEL_BINDING.local_variable_get(n)) }
+        var_entry(n.to_s, TOPLEVEL_BINDING.local_variable_get(n))
       },
       ivars: recv.instance_variables.filter_map { |n|
         begin
-          { name: n.to_s, text: render_value(recv.instance_variable_get(n)) }
+          var_entry(n.to_s, recv.instance_variable_get(n))
         rescue Exception
           nil
         end
@@ -186,8 +205,9 @@ class RLS__Driver
         val = Object.const_get(c)
         next unless val.is_a?(Module)
         name = c.to_s
-        text = @class_src[name] || class_fallback(name, val)
-        { name: name, text: text }
+        entry = { name: name, text: @class_src[name] || class_fallback(name, val) }
+        entry[:code] = @class_src[name] if @class_src[name]
+        entry
       rescue Exception
         nil
       end
@@ -207,7 +227,9 @@ class RLS__Driver
     after = rls_methods
     after.each_key { |n| @seen_order[n] ||= (@next_seq += 1) }
     after.keys.sort_by { |n| @seen_order[n] }.map do |name|
-      { name: name, text: @method_src[name] || "def #{name}" }
+      entry = { name: name, text: @method_src[name] || "def #{name}" }
+      entry[:code] = @method_src[name] if @method_src[name]
+      entry
     end
   end
 

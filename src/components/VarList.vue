@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import type { Entry } from "../snapshot";
+import type { PaneEntry } from "../snapshot";
 
-defineProps<{ entries: Entry[] }>();
+defineProps<{ entries: PaneEntry[] }>();
+const emit = defineEmits<{ restore: [PaneEntry] }>();
 
 const charMeasure = ref<HTMLElement | null>(null);
 
@@ -13,6 +14,12 @@ function onKey(e: KeyboardEvent) {
   const charW = charMeasure.value?.getBoundingClientRect().width || 8;
   el.scrollLeft += e.key === "ArrowRight" ? charW : -charW;
 }
+
+function onDblClick(entry: PaneEntry) {
+  if (!entry.stale) return;
+  window.getSelection()?.removeAllRanges();
+  emit("restore", entry);
+}
 </script>
 
 <template>
@@ -22,8 +29,10 @@ function onKey(e: KeyboardEvent) {
       v-for="entry in entries"
       :key="entry.name"
       class="var-row"
+      :class="{ stale: entry.stale }"
       tabindex="0"
       @keydown="onKey"
+      @dblclick="onDblClick(entry)"
     >{{ entry.name }} = {{ entry.text }}</div>
   </div>
 </template>
@@ -48,7 +57,15 @@ function onKey(e: KeyboardEvent) {
   display: none;
 }
 .var-row:focus {
-  outline: none;
-  background-color: rgba(128, 128, 128, 0.2);
+  outline: 1px solid #888;
+  outline-offset: -1px;
+}
+.var-row.stale {
+  background-color: #d4d4d4;
+}
+@media (prefers-color-scheme: dark) {
+  .var-row.stale {
+    background-color: #4a4a4a;
+  }
 }
 </style>

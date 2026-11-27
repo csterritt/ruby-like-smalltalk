@@ -12,10 +12,10 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ConsoleModel, initialState, type Backend, type Item, type RubyEvent } from "../console";
-import type { Snapshot } from "../snapshot";
+import type { PaneEntry, Panes } from "../snapshot";
 
 const props = defineProps<{ suspended: boolean }>();
-const emit = defineEmits<{ snapshot: [Snapshot] }>();
+const emit = defineEmits<{ panes: [Panes] }>();
 
 const backend: Backend = {
   check: (code) => invoke<boolean>("ruby_check", { code }),
@@ -28,8 +28,8 @@ const state = reactive(initialState());
 const model = new ConsoleModel(backend, state);
 
 watch(
-  () => state.snapshot,
-  (s) => emit("snapshot", s),
+  () => state.panes,
+  (p) => emit("panes", p),
 );
 
 const rootEl = ref<HTMLDivElement | null>(null);
@@ -165,7 +165,11 @@ function noticeTone(item: Item): string {
 
 const BT_MAX = 8;
 
-defineExpose({ ctrlC: () => model.ctrlC(), focus });
+defineExpose({
+  ctrlC: () => model.ctrlC(),
+  focus,
+  restore: (e: PaneEntry) => model.restore(e),
+});
 </script>
 
 <template>

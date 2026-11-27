@@ -372,6 +372,15 @@ fn snap_entries(ev: &Value, area: &str) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+fn snap_code(ev: &Value, area: &str, name: &str) -> Option<String> {
+    ev.get("snapshot")?
+        .get(area)?
+        .as_array()?
+        .iter()
+        .find(|e| e.get("name").and_then(|v| v.as_str()) == Some(name))
+        .and_then(|e| e.get("code").and_then(|v| v.as_str()).map(str::to_owned))
+}
+
 fn status_of(ev: &Value) -> Option<String> {
     ev.get("status").and_then(|v| v.as_str()).map(str::to_owned)
 }
@@ -992,5 +1001,63 @@ fn v08_long_value_truncated() {
         .unwrap_or_default();
     scn.check(t.chars().count() <= 4001, format!("len {}", t.chars().count()));
     scn.check(t.ends_with('…'), format!("no ellipsis: ...{:?}", &t[t.len().saturating_sub(20)..]));
+    scn.finish();
+}
+
+#[test]
+fn v09_var_code_and_restore() {
+    let mut scn = Scn::new(
+        "V09",
+        "S15",
+        "entries carry recreating code",
+        "x = 14 code; hash code re-evals; Object.new has none",
+    );
+    let ev = scn.eval_and_wait("x = 14").unwrap_or_default();
+    scn.expect_eq(
+        snap_code(&ev, "locals", "x"),
+        Some("x = 14".to_string()),
+        "x code",
+    );
+
+    let ev = scn.eval_and_wait("h = {a: [1, \"s\"]}").unwrap_or_default();
+    let code = snap_code(&ev, "locals", "h");
+    scn.check(code.is_some(), "h has no code".to_string());
+    scn.eval_and_wait("h = nil");
+    if let Some(code) = code {
+        scn.eval_and_wait(&code);
+    }
+    let v = scn.eval_value("h");
+    scn.expect_eq(v, Some("{a: [1, \"s\"]}".to_string()), "h restored");
+
+    let ev = scn.eval_and_wait("o = Object.new").unwrap_or_default();
+    scn.expect_eq(snap_code(&ev, "locals", "o"), None, "o code");
+    scn.finish();
+}
+
+#[test]
+fn v10_class_and_method_code() {
+    let mut scn = Scn::new(
+        "V10",
+        "S15",
+        "class/method entries carry their source",
+        "Foo source; sq source; Bar = Class.new has none",
+    );
+    let src = "class Foo\n  def a\n  end\nend";
+    let ev = scn.eval_and_wait(src).unwrap_or_default();
+    scn.expect_eq(
+        snap_code(&ev, "classes", "Foo"),
+        Some(src.to_string()),
+        "Foo code",
+    );
+
+    let ev = scn.eval_and_wait("Bar = Class.new").unwrap_or_default();
+    scn.expect_eq(snap_code(&ev, "classes", "Bar"), None, "Bar code");
+
+    let ev = scn.eval_and_wait("def sq(n) = n * n").unwrap_or_default();
+    scn.expect_eq(
+        snap_code(&ev, "methods", "sq"),
+        Some("def sq(n) = n * n".to_string()),
+        "sq code",
+    );
     scn.finish();
 }
