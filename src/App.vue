@@ -92,6 +92,7 @@ const fileRowH = ref(0);
 const filePaged = ref(false);
 const fileSegs = ref<FileDisplaySeg[]>([]);
 const lineWrap = ref(false);
+const lineDigits = computed(() => String(fileView.value?.lineCount ?? 1).length);
 const lineTexts = new Map<number, string>();
 const lineHeights = new Map<number, number>();
 const BAR_TEXT = "● ".repeat(1000);
@@ -148,20 +149,28 @@ function measureLineHeights(indices: number[]) {
   if (width <= 0 || rowH <= 0) return;
 
   const host = document.createElement("div");
+  host.className = "file-content";
   host.style.position = "absolute";
   host.style.visibility = "hidden";
   host.style.pointerEvents = "none";
   host.style.top = "0";
   host.style.left = "0";
   host.style.width = `${width}px`;
+  const digits = String(fileView.value?.lineCount ?? 0).length;
   try {
     for (const i of indices) {
-      const child = document.createElement("div");
-      child.className = "file-row";
-      child.style.whiteSpace = "pre-wrap";
-      child.style.overflowWrap = "anywhere";
-      child.textContent = lineTexts.get(i) || " ";
-      host.appendChild(child);
+      const row = document.createElement("div");
+      row.className = "file-line";
+      const num = document.createElement("div");
+      num.className = "line-num";
+      num.style.width = `${digits}ch`;
+      num.textContent = String(i + 1);
+      const text = document.createElement("div");
+      text.className = "file-row line-text";
+      text.textContent = lineTexts.get(i) || " ";
+      row.appendChild(num);
+      row.appendChild(text);
+      host.appendChild(row);
     }
     overlay.appendChild(host);
     let k = 0;
@@ -631,8 +640,14 @@ onUnmounted(() => {
                   <div
                     v-for="line in seg.lines"
                     :key="line.index"
-                    class="file-row"
-                  >{{ line.text || " " }}</div>
+                    class="file-line"
+                  >
+                    <div
+                      class="line-num"
+                      :style="{ width: `${lineDigits}ch` }"
+                    >{{ line.index + 1 }}</div>
+                    <div class="file-row line-text">{{ line.text || " " }}</div>
+                  </div>
                 </div>
               </div>
               <div v-else class="file-row file-bar" aria-hidden="true">{{ BAR_TEXT }}</div>
@@ -795,7 +810,34 @@ body.dragging {
 }
 
 .rows-clip {
-  overflow: hidden;
+  display: flow-root;
+  overflow: clip;
+}
+
+.file-line {
+  display: flex;
+  align-items: stretch;
+}
+
+.line-num {
+  flex: none;
+  box-sizing: content-box;
+  text-align: right;
+  padding-right: 0.5ch;
+  border-right: 1px solid #0f0f0f;
+  white-space: pre;
+  user-select: none;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: #f6f6f6;
+  box-shadow: -8px 0 0 #f6f6f6;
+}
+
+.line-text {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0.5ch;
 }
 
 .file-row {
@@ -887,6 +929,12 @@ body.dragging {
   .file-bar {
     color: #2f2f2f;
     background-color: #f6f6f6;
+  }
+
+  .line-num {
+    background-color: #2f2f2f;
+    box-shadow: -8px 0 0 #2f2f2f;
+    border-right-color: #f6f6f6;
   }
 
   .divider,
