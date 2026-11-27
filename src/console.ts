@@ -21,6 +21,16 @@ export type RubyEvent =
 
 export type SubmitResult = { ok: true } | { ok: false; error: string };
 
+export function selectedLines(items: Item[], a: number, b: number): string {
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  return items
+    .slice(lo, hi + 1)
+    .filter((i): i is Extract<Item, { kind: "input" }> => i.kind === "input")
+    .map((i) => i.text)
+    .join("\n");
+}
+
 export interface Backend {
   check(code: string): Promise<boolean>;
   eval(code: string): Promise<number>;
@@ -445,6 +455,22 @@ export class ConsoleModel {
         break;
     }
     await this.runCode(code);
+  }
+
+  async insertAtPrompt(
+    text: string,
+    start: number,
+    end: number,
+  ): Promise<SubmitResult> {
+    const st = this.state;
+    if (st.mode !== "idle") {
+      return { ok: false, error: "Ruby is busy; try again when it's idle." };
+    }
+    const line = st.line;
+    const s = Math.max(0, Math.min(start, line.length));
+    const e = Math.max(s, Math.min(end, line.length));
+    await this.paste(line.slice(0, s), text, line.slice(e));
+    return { ok: true };
   }
 
   setLine(text: string) {

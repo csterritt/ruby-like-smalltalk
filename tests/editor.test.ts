@@ -3,9 +3,13 @@ import { editorText } from "../src/editor";
 import {
   ConsoleModel,
   initialState,
+  selectedLines,
   type Backend,
+  type Item,
   type RubyEvent,
 } from "../src/console";
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
 
 const backend: Backend = {
   check: async () => true,
@@ -148,4 +152,73 @@ test("submit fails when backend.eval rejects", async () => {
     },
   });
   expect(await m.submit("x = 1")).toEqual({ ok: false, error: "Error: ruby down" });
+});
+
+test("selectedLines joins input items in range, skips others", () => {
+  const items: Item[] = [
+    { kind: "input", prompt: "rb> ", text: "x = 1" },
+    { kind: "stdout", text: "out" },
+    { kind: "input", prompt: "..> ", text: "y = 2" },
+    { kind: "input", prompt: "rb> ", text: "z = 3" },
+    { kind: "value", text: "3" },
+  ];
+  expect(selectedLines(items, 0, 3)).toBe("x = 1\ny = 2\nz = 3");
+  expect(selectedLines(items, 3, 0)).toBe("x = 1\ny = 2\nz = 3");
+  expect(selectedLines(items, 0, 2)).toBe("x = 1\ny = 2");
+  expect(selectedLines(items, 0, 0)).toBe("x = 1");
+});
+
+test("insertAtPrompt single-line splices into the line, no eval", async () => {
+  const m = mk();
+  m.setLine("x = ");
+  expect(await m.insertAtPrompt("14", 4, 4)).toEqual({ ok: true });
+  expect(m.state.line).toBe("x = 14");
+  // replacing a range
+  m.setLine("aaZZbb");
+  expect(await m.insertAtPrompt("CC", 2, 4)).toEqual({ ok: true });
+  expect(m.state.line).toBe("aaCCbb");
+});
+
+test("insertAtPrompt clamps start/end", async () => {
+  const m = mk();
+  m.setLine("ab");
+  expect(await m.insertAtPrompt("X", 99, 200)).toEqual({ ok: true });
+  expect(m.state.line).toBe("abX");
+});
+
+test("insertAtPrompt multi-line enters earlier lines, keeps last", async () => {
+  const calls: { op: string; arg: string }[] = [];
+  const m = mk({
+    ...backend,
+    check: async (code) => {
+      calls.push({ op: "check", arg: code });
+      return true;
+    },
+    eval: async (code) => {
+      calls.push({ op: "eval", arg: code });
+      return 1;
+    },
+  });
+  m.setLine("x = ");
+  const p = m.insertAtPrompt("[1,\n2]", 4, 4);
+  await tick();
+  result(m, { status: "ok", value: "[1, 2]" });
+  expect(await p).toEqual({ ok: true });
+  expect(calls.filter((c) => c.op === "eval").map((c) => c.arg)).toEqual([
+    "x = [1,\n",
+  ]);
+  expect(m.state.line).toBe("2]");
+});
+
+test("insertAtPrompt while busy fails, line unchanged", async () => {
+  const m = mk();
+  m.setLine("sleep 1");
+  await m.enter();
+  expect(m.state.mode).toBe("busy");
+  m.setLine("draft");
+  expect(await m.insertAtPrompt("x", 0, 0)).toEqual({
+    ok: false,
+    error: "Ruby is busy; try again when it's idle.",
+  });
+  expect(m.state.line).toBe("draft");
 });

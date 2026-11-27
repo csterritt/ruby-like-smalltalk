@@ -70,12 +70,32 @@ function removeCtxEntry() {
   consoleRef.value?.focus();
 }
 
+interface EditorDef {
+  area?: keyof Panes;
+  name: string;
+  code: string;
+  mode: "define" | "prompt";
+}
+
 const editors = new Map<string, WebviewWindow>();
-const editorDefs = new Map<
-  string,
-  { area: keyof Panes; name: string; code: string }
->();
+const editorDefs = new Map<string, EditorDef>();
 let editorSeq = 0;
+
+function openEditor(def: EditorDef, title: string, key?: string) {
+  const label = `editor-${++editorSeq}`;
+  editorDefs.set(label, def);
+  const w = new WebviewWindow(label, {
+    url: "index.html?editor=" + encodeURIComponent(label),
+    title,
+    width: 640,
+    height: 420,
+  });
+  if (key) editors.set(key, w);
+  void w.once("tauri://destroyed", () => {
+    if (key) editors.delete(key);
+    editorDefs.delete(label);
+  });
+}
 
 function editCtxEntry() {
   const m = ctxMenu.value;
@@ -87,23 +107,20 @@ function editCtxEntry() {
     void existing.setFocus();
     return;
   }
-  const label = `editor-${++editorSeq}`;
-  editorDefs.set(label, {
-    area: m.area,
-    name: m.entry.name,
-    code: editorText(m.area, m.entry),
-  });
-  const w = new WebviewWindow(label, {
-    url: "index.html?editor=" + encodeURIComponent(label),
-    title: `Edit ${m.entry.name}`,
-    width: 640,
-    height: 420,
-  });
-  editors.set(key, w);
-  void w.once("tauri://destroyed", () => {
-    editors.delete(key);
-    editorDefs.delete(label);
-  });
+  openEditor(
+    {
+      area: m.area,
+      name: m.entry.name,
+      code: editorText(m.area, m.entry),
+      mode: "define",
+    },
+    `Edit ${m.entry.name}`,
+    key,
+  );
+}
+
+function onEditLines(text: string) {
+  openEditor({ name: "selection", code: text, mode: "prompt" }, "Edit selection");
 }
 
 const LINE_WIDTH = 1;
@@ -421,6 +438,7 @@ const consoleRef = ref<{
   restore(e: PaneEntry): Promise<void>;
   remove(area: keyof Panes, e: PaneEntry): Promise<void>;
   submit(code: string): Promise<SubmitResult>;
+  insert(text: string): Promise<SubmitResult>;
 } | null>(null);
 
 function restoreEntry(e: PaneEntry) {
@@ -675,15 +693,19 @@ onMounted(async () => {
       await emitTo(e.payload.label, EDITOR_INIT, {
         name: def.name,
         area: def.area,
+        mode: def.mode,
         code: def.code,
       });
     }),
   );
   unlistenEditor.push(
     await listen<EditorSave>(EDITOR_SAVE, async (e) => {
+      const def = editorDefs.get(e.payload.label);
+      const unavailable: SubmitResult = { ok: false, error: "console unavailable" };
       const r =
-        (await consoleRef.value?.submit(e.payload.code)) ??
-        ({ ok: false, error: "console unavailable" } satisfies SubmitResult);
+        def?.mode === "prompt"
+          ? ((await consoleRef.value?.insert(e.payload.code)) ?? unavailable)
+          : ((await consoleRef.value?.submit(e.payload.code)) ?? unavailable);
       await emitTo(e.payload.label, EDITOR_RESULT, r);
     }),
   );
@@ -741,6 +763,7 @@ onUnmounted(() => {
           ref="consoleRef"
           :suspended="dirOpen || !!fileView"
           @panes="panes = $event"
+          @edit-lines="onEditLines"
         />
         <div v-if="dirOpen" ref="dropdown" class="dir-dropdown">
           <span ref="gapEl" class="gap-measure" aria-hidden="true">{{ "  " }}</span>

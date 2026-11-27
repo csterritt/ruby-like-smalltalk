@@ -11,7 +11,8 @@ export interface EditorReady {
 
 export interface EditorInit {
   name: string;
-  area: keyof Panes;
+  area?: keyof Panes;
+  mode: "define" | "prompt";
   code: string;
 }
 
